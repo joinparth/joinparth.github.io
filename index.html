@@ -2281,14 +2281,22 @@ function renderSidebar(containerId, activePage) {
   const me = App.me();
   let html = `<div class="sidebar-logo">parth<span>.</span>social</div>`;
 
-  const unread = App.notifCount || 0;
+  const unreadNotif = App.notifCount || 0;
+  const unreadDms = App.unreadDmCount || 0;
 
   NAV.forEach(n => {
     const isAdmin = n.id === 'admin';
     if (isAdmin) return; // only show admin via specific check below
+    
     const active = n.id === activePage ? 'active' : '';
-    const badge = n.id === 'notifications' && unread > 0
-      ? `<span class="nav-badge">${unread > 9 ? '9+' : unread}</span>` : '';
+    
+    let badge = '';
+    if (n.id === 'notifications' && unreadNotif > 0) {
+      badge = `<span class="nav-badge">${unreadNotif > 9 ? '9+' : unreadNotif}</span>`;
+    } else if (n.id === 'dm' && unreadDms > 0) {
+      badge = `<span class="nav-badge">${unreadDms > 9 ? '9+' : unreadDms}</span>`;
+    }
+
     html += `<div class="nav-item ${active}" onclick="navigate('${n.id}')">
       <span class="nav-icon">${n.icon}</span>${n.label}${badge}
     </div>`;
@@ -2356,6 +2364,7 @@ const App = {
   displayName: '',
   avatarData: null,
   notifCount: 0,
+  unreadDmCount: 0,
   settings: {
     showMuted: false,
     relativeTime: true,
@@ -2402,12 +2411,35 @@ const App = {
 
     // Notification count
     await this.refreshNotifCount();
+    await this.refreshDmCount(); 
+
 
     navigate('feed');
   },
 
   async saveSettings() {
     await db.set(`/users/${this.me()}/settings`, this.settings);
+  },
+
+  async refreshDmCount() {
+    const me = this.me();
+    if (!me) return;
+    const dms = await db.get('/dms');
+    if (!dms) { this.unreadDmCount = 0; return; }
+
+    let count = 0;
+    // Iterate over all DM threads
+    Object.entries(dms)
+      .filter(([id]) => id.includes(me)) // Only threads involving me
+      .forEach(([id, thread]) => {
+        if (thread.messages) {
+          // Count messages not sent by me and not read
+          Object.values(thread.messages).forEach(msg => {
+            if (msg.sender !== me && !msg.read) count++;
+          });
+        }
+      });
+    this.unreadDmCount = count;
   },
 
   applyAccent(color) {
