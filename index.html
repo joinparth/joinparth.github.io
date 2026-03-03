@@ -3490,6 +3490,10 @@ async function leaveGroup() {
 // ============================================================
 // PROFILE
 // ============================================================
+
+// ============================================================
+// PROFILE
+// ============================================================
 let profileTab = 'posts';
 
 async function initProfile(viewUser) {
@@ -3528,67 +3532,23 @@ async function initProfile(viewUser) {
 
   const actionsRow = document.getElementById('profileActionsRow');
   actionsRow.innerHTML = '';
-   if (target === me) {
-     // Own profile — avatar upload
-     const avatarWrap = document.getElementById('profileAvatarEl');
-     if (!avatarWrap) return;
-   
-     if (!avatarWrap.querySelector('.avatar-upload-overlay')) {
-       const ov = document.createElement('div');
-       ov.className = 'avatar-upload-overlay';
-       ov.id = 'avatarUploadOverlay';
-       ov.textContent = '📷';
-       avatarWrap.appendChild(ov);
-     }
-   
-     document.getElementById('avatarUploadOverlay').onclick = () =>
-       document.getElementById('avatarFileInput').click();
-   
-     document.getElementById('avatarFileInput').onchange = async (e) => {
-       const file = e.target.files[0];
-       if (!file) return;
-   
-       try {
-         const compressed = await compressAvatar(file);
-         await db.set(`/users/${me}/avatar`, compressed);
-         App.avatarData = compressed;
-   
-         // Update image without breaking overlay
-         avatarWrap.innerHTML = `
-           <img src="data:image/webp;base64,${compressed}" alt="">
-         `;
-   
-         renderSidebar('sidebar-profile', 'profile');
-         toast('Avatar updated!', 'success');
-         await log('avatar_update');
-   
-       } catch (err) {
-         console.error(err);
-         toast('Avatar update failed', 'error');
-       }
-     };  // ✅ CLOSE THE HANDLER HERE
-   
-   } else {
-     // Follow / unfollow
-     const meData = await db.get(`/users/${me}`);
-     const isFollowing =
-       meData && meData.following && meData.following[target];
-   
-     const followBtn = document.createElement('button');
-     followBtn.className = `btn ${isFollowing ? 'btn-ghost' : 'btn-primary'} btn-sm`;
-     followBtn.textContent = isFollowing ? 'Unfollow' : 'Follow';
-   
-     followBtn.onclick = async () => {
-       if (isFollowing) {
-         await unfollowUser(target);
-       } else {
-         await followUser(target);
-       }
-       initProfile(target);
-     };
-   
-     actionsRow.appendChild(followBtn);
-   }
+
+  if (target === me) {
+    console.log('nvm')
+    };
+  } else {
+    // Follow / unfollow
+    const meData = await db.get(`/users/${me}`);
+    const isFollowing = meData && meData.following && meData.following[target];
+    const followBtn = document.createElement('button');
+    followBtn.className = `btn ${isFollowing ? 'btn-ghost' : 'btn-primary'} btn-sm`;
+    followBtn.textContent = isFollowing ? 'Unfollow' : 'Follow';
+    followBtn.onclick = async () => {
+      if (isFollowing) { await unfollowUser(target); }
+      else { await followUser(target); }
+      initProfile(target);
+    };
+
     const muteBtn = document.createElement('button');
     const isMuted = !!App.mutedUsers[target];
     muteBtn.className = 'btn btn-ghost btn-sm';
