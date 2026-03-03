@@ -3528,8 +3528,30 @@ async function initProfile(viewUser) {
 
   const actionsRow = document.getElementById('profileActionsRow');
   actionsRow.innerHTML = '';
-  if (target === me) {
-    console.log('nvm');
+   if (target === me) {
+       // Own profile — avatar upload
+       const avatarWrap = document.getElementById('profileAvatarEl');
+       if (!avatarWrap.querySelector('.avatar-upload-overlay')) {
+         const ov = document.createElement('div');
+         ov.className = 'avatar-upload-overlay';
+         ov.id = 'avatarUploadOverlay';
+         ov.textContent = '📷';
+         avatarWrap.appendChild(ov);
+       }
+       document.getElementById('avatarUploadOverlay').onclick = () =>
+         document.getElementById('avatarFileInput').click();
+   
+       document.getElementById('avatarFileInput').onchange = async e => {
+         const file = e.target.files[0];
+         if (!file) return;
+         const compressed = await compressAvatar(file);
+         await db.set(`/users/${me}/avatar`, compressed);
+         App.avatarData = compressed;
+         document.getElementById('profileAvatarEl').innerHTML = `<img src="data:image/webp;base64,${compressed}" alt="">`;
+         // refresh sidebars
+         renderSidebar('sidebar-profile', 'profile');
+         toast('Avatar updated!', 'success');
+         await log('avatar_update');
   } else {
     // Follow / unfollow
     const meData = await db.get(`/users/${me}`);
