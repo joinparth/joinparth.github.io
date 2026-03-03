@@ -2430,7 +2430,10 @@ const App = {
     let count = 0;
     // Iterate over all DM threads
     Object.entries(dms)
-      .filter(([id]) => id.includes(me)) // Only threads involving me
+      .filter(([id]) => {
+        const parts = id.split('_');
+        return parts.length === 2 && (parts[0] === me || parts[1] === me);
+      })
       .forEach(([id, thread]) => {
         if (thread.messages) {
           // Count messages not sent by me and not read
