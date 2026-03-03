@@ -3498,10 +3498,8 @@ async function initProfile(viewUser) {
 
   const actionsRow = document.getElementById('profileActionsRow');
   actionsRow.innerHTML = '';
-
   if (target === me) {
-    console.log('nvm')
-    };
+    console.log('nvm');
   } else {
     // Follow / unfollow
     const meData = await db.get(`/users/${me}`);
