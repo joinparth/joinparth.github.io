@@ -1594,6 +1594,14 @@ img { max-width: 100%; display: block; }
 .w-full { width: 100%; }
 .form-row { display: flex; flex-direction: column; gap: 10px; }
 
+/* Feed skeleton placeholders */
+.feed-skeleton { padding: 16px 0; border-bottom: 1px solid var(--border); }
+.feed-skeleton .sk-row { display:flex; gap:10px; margin-bottom:10px; }
+.feed-skeleton .sk-avatar { width:38px; height:38px; border-radius:50%; flex-shrink:0; }
+.feed-skeleton .sk-lines { flex:1; display:flex; flex-direction:column; gap:6px; }
+.feed-skeleton .sk-line { height:12px; border-radius:4px; }
+.feed-skeleton .sk-body { height:14px; border-radius:4px; margin-bottom:4px; }
+
 /* ============================================================
    RESPONSIVE
    ============================================================ */
@@ -2024,6 +2032,9 @@ img { max-width: 100%; display: block; }
           <div class="stat-card"><div class="stat-number" id="stat-muted">—</div><div class="stat-label">Muted users</div></div>
           <div class="stat-card"><div class="stat-number" id="stat-dms">—</div><div class="stat-label">DM threads</div></div>
         </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+          <button class="btn btn-ghost btn-sm" id="adminRefreshStats">↻ Refresh stats</button>
+        </div>
         <div class="admin-tabs">
           <button class="admin-tab-btn active" data-tab="a-users">Users</button>
           <button class="admin-tab-btn" data-tab="a-posts">Posts</button>
@@ -2109,7 +2120,7 @@ img { max-width: 100%; display: block; }
     <p id="confirmMsg" style="font-size:14px;color:var(--text2);margin-bottom:16px;"></p>
     <div style="display:flex;gap:8px;">
       <button class="btn btn-danger" id="confirmOk">Confirm</button>
-      <button class="btn btn-ghost" onclick="closeModal('confirmModal')">Cancel</button>
+      <button class="btn btn-ghost" id="confirmCancel">Cancel</button>
     </div>
   </div>
 </div>
@@ -2145,33 +2156,23 @@ class FirebaseAPI {
     try {
       const r = await fetch(`${this.base}${path}.json`, opts);
       if (!r.ok) return null;
-      return r.status === 200 ? r.json() : true;
+      // DELETE returns 200 with null body — json() returns null which is correct
+      return r.json();
     } catch { return null; }
   }
   get(p)        { return this.req(p); }
   set(p, d)     { return this.req(p, { method:'PUT',  headers:this.heads, body:JSON.stringify(d) }); }
-  push(p, d)    { return this.req(p, { method:'POST', headers:this.heads, body:JSON.stringify(d) }); }
+  // push returns the Firebase-generated key object {name: "-Nxxx"} — caller can use result.name
+  async push(p, d) {
+    const r = await this.req(p, { method:'POST', headers:this.heads, body:JSON.stringify(d) });
+    return r; // { name: "-Nxxx" } or null
+  }
   patch(p, d)   { return this.req(p, { method:'PATCH',headers:this.heads, body:JSON.stringify(d) }); }
   del(p)        { return this.req(p, { method:'DELETE' }); }
   id()          { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
 }
 
 const db = new FirebaseAPI('https://thgrade-17fcd-default-rtdb.firebaseio.com/');
-
-// ============================================================
-// ANIMATE — stagger helper + spring
-// ============================================================
-const Animate = {
-  stagger(els, delay = 60) {
-    els.forEach((el, i) => {
-      el.style.animationDelay = `${i * delay}ms`;
-      el.classList.add('stagger-item');
-    });
-  },
-  spring(el) {
-    el.style.transition = 'transform 0.15s cubic-bezier(0.34,1.56,0.64,1)';
-  }
-};
 
 // ============================================================
 // TOAST
@@ -2196,14 +2197,39 @@ function openModal(id) {
 function closeModal(id) {
   document.getElementById(id).classList.remove('open');
 }
+
+// Fix #12: confirm2 cleans up its handler on backdrop close too,
+// and uses a one-shot abort controller pattern so stacked calls don't leak.
 function confirm2(title, msg) {
   return new Promise(res => {
     document.getElementById('confirmTitle').textContent = title;
     document.getElementById('confirmMsg').textContent = msg;
     openModal('confirmModal');
-    const btn = document.getElementById('confirmOk');
-    const handler = () => { closeModal('confirmModal'); res(true); btn.removeEventListener('click', handler); };
-    btn.addEventListener('click', handler);
+
+    const okBtn     = document.getElementById('confirmOk');
+    const cancelBtn = document.getElementById('confirmCancel');
+    const overlay   = document.getElementById('confirmModal');
+
+    // Clone-replace buttons to nuke any previously attached listeners
+    const newOk = okBtn.cloneNode(true);
+    okBtn.replaceWith(newOk);
+    const newCancel = cancelBtn.cloneNode(true);
+    cancelBtn.replaceWith(newCancel);
+
+    function finish(result) {
+      closeModal('confirmModal');
+      // Re-detach backdrop listener
+      overlay.removeEventListener('click', backdropHandler);
+      res(result);
+    }
+
+    function backdropHandler(e) {
+      if (e.target === overlay) finish(false);
+    }
+
+    document.getElementById('confirmOk').addEventListener('click', () => finish(true), { once: true });
+    document.getElementById('confirmCancel').addEventListener('click', () => finish(false), { once: true });
+    overlay.addEventListener('click', backdropHandler);
   });
 }
 
@@ -2225,11 +2251,15 @@ let currentPage = null;
 let pageIntervals = {};
 
 function navigate(page, params = {}) {
-  // Clear previous page's polling interval
+  // Clear all known polling intervals for the previous page
   if (currentPage && pageIntervals[currentPage]) {
     clearInterval(pageIntervals[currentPage]);
     delete pageIntervals[currentPage];
   }
+  // Also clear module-level interval vars to prevent double-start (#10)
+  feedInterval     = null;
+  dmInterval       = null;
+  groupInterval    = null;
 
   PAGES.forEach(p => {
     const el = document.getElementById(`page-${p}`);
@@ -2282,56 +2312,58 @@ function renderSidebar(containerId, activePage) {
   let html = `<div class="sidebar-logo">parth<span>.</span>social</div>`;
 
   const unreadNotif = App.notifCount || 0;
-  const unreadDms = App.unreadDmCount || 0;
+  const unreadDms   = App.unreadDmCount || 0;
 
   NAV.forEach(n => {
-    const isAdmin = n.id === 'admin';
-    if (isAdmin) return; // only show admin via specific check below
-    
     const active = n.id === activePage ? 'active' : '';
-    
     let badge = '';
     if (n.id === 'notifications' && unreadNotif > 0) {
       badge = `<span class="nav-badge">${unreadNotif > 9 ? '9+' : unreadNotif}</span>`;
     } else if (n.id === 'dm' && unreadDms > 0) {
       badge = `<span class="nav-badge">${unreadDms > 9 ? '9+' : unreadDms}</span>`;
     }
-
-    html += `<div class="nav-item ${active}" onclick="navigate('${n.id}')">
+    html += `<div class="nav-item ${active}" data-nav="${n.id}">
       <span class="nav-icon">${n.icon}</span>${n.label}${badge}
     </div>`;
   });
 
-  // Admin link if admin
   if (App.isAdmin) {
-    html += `<div class="nav-item ${activePage === 'admin' ? 'active' : ''}" onclick="navigate('admin')">
+    html += `<div class="nav-item ${activePage === 'admin' ? 'active' : ''}" data-nav="admin">
       <span class="nav-icon">🛡️</span>Admin
     </div>`;
   }
 
+  // Fix #4: use data attributes for nav targets instead of inline onclick with user data
+  const meEscaped = esc(me || '');
   html += `<div class="sidebar-bottom">
-    <div class="sidebar-user" onclick="navigate('profile', {user:'${me}'})">
+    <div class="sidebar-user" data-nav-profile="${meEscaped}">
       <div class="user-avatar-sm" id="${containerId}-avatar">${me ? me[0].toUpperCase() : '?'}</div>
       <div class="user-info">
-        <div class="user-name">${App.displayName || me || ''}</div>
-        <div class="user-handle">@${me || ''}</div>
+        <div class="user-name">${esc(App.displayName || me || '')}</div>
+        <div class="user-handle">@${meEscaped}</div>
       </div>
     </div>
-    <div class="nav-item" onclick="App.logout()"><span class="nav-icon">🚪</span>Sign out</div>
+    <div class="nav-item" id="${containerId}-logout"><span class="nav-icon">🚪</span>Sign out</div>
   </div>`;
 
   el.innerHTML = html;
 
-  // Update avatar in sidebar — prefer avatarUrl, fall back to base64
+  // Bind nav clicks safely via JS (not inline onclick)
+  el.querySelectorAll('[data-nav]').forEach(item => {
+    item.addEventListener('click', () => navigate(item.dataset.nav));
+  });
+  el.querySelector('[data-nav-profile]').addEventListener('click', () => {
+    navigate('profile', { user: me });
+  });
+  el.getElementById && void 0; // no-op
+  document.getElementById(`${containerId}-logout`).addEventListener('click', () => App.logout());
+
+  // Avatar — URL-only now (#5, #6)
   const sidebarUserData = usersCache[me] || {};
-  const sidebarAvatarSrc = sidebarUserData.avatarUrl || null;
+  const avatarUrl = sidebarUserData.avatarUrl || null;
   const av = document.getElementById(`${containerId}-avatar`);
-  if (av) {
-    if (sidebarAvatarSrc) {
-      av.innerHTML = `<img src="${esc(sidebarAvatarSrc)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.style.display='none'">`;
-    } else if (App.avatarData) {
-      av.innerHTML = `<img src="data:image/webp;base64,${App.avatarData}" alt="">`;
-    }
+  if (av && avatarUrl) {
+    av.innerHTML = `<img src="${esc(avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.parentNode.textContent='${esc(me ? me[0].toUpperCase() : '?')}'">`;
   }
 }
 
@@ -2354,6 +2386,14 @@ function setupHamburger(page) {
   }
 }
 
+// Resize listener for DM back button (#22)
+window.addEventListener('resize', () => {
+  const backBtn = document.getElementById('dmBackBtn');
+  if (backBtn && currentPage === 'dm' && currentConvo) {
+    backBtn.style.display = window.innerWidth <= 768 ? 'inline-flex' : 'none';
+  }
+});
+
 // ============================================================
 // APP STATE
 // ============================================================
@@ -2362,7 +2402,6 @@ const App = {
   _token: null,
   isAdmin: false,
   displayName: '',
-  avatarData: null,
   notifCount: 0,
   unreadDmCount: 0,
   settings: {
@@ -2383,7 +2422,7 @@ const App = {
   token() { return this._token || localStorage.getItem('authToken'); },
 
   async init() {
-    this._me = localStorage.getItem('username');
+    this._me    = localStorage.getItem('username');
     this._token = localStorage.getItem('authToken');
 
     if (!this._me || !this._token) {
@@ -2391,14 +2430,20 @@ const App = {
       return;
     }
 
+    // Fix #2: Validate session token against DB before trusting localStorage
+    const session = await db.get(`/sessions/${this._token}`);
+    if (!session || session.username !== this._me) {
+      this.logout();
+      return;
+    }
+
     // Load user data
     const user = await db.get(`/users/${this._me}`);
     if (!user) { this.logout(); return; }
 
-    this.isAdmin = !!user.isAdmin;
+    this.isAdmin    = !!user.isAdmin;
     this.displayName = user.displayName || this._me;
-    this.avatarData = user.avatar || null;
-    this.mutedUsers = user.muted || {};
+    this.mutedUsers  = user.muted || {};
 
     // Load settings from Firebase
     if (user.settings) Object.assign(this.settings, user.settings);
@@ -2409,10 +2454,9 @@ const App = {
     // Compact mode
     if (this.settings.compact) document.body.classList.add('compact');
 
-    // Notification count
+    await loadUserCache();
     await this.refreshNotifCount();
-    await this.refreshDmCount(); 
-
+    await this.refreshDmCount();
 
     navigate('feed');
   },
@@ -2421,23 +2465,26 @@ const App = {
     await db.set(`/users/${this.me()}/settings`, this.settings);
   },
 
+  // Fix #20: centralized DM badge refresh, called on poll intervals too
   async refreshDmCount() {
     const me = this.me();
     if (!me) return;
     const dms = await db.get('/dms');
     if (!dms) { this.unreadDmCount = 0; return; }
-
-   let count = 0;
-   Object.entries(dms)
-     .filter(([id]) => id.startsWith(me + '_') || id.endsWith('_' + me))
-     .forEach(([id, thread]) => {
-       if (thread.messages) {
-         Object.values(thread.messages).forEach(msg => {
-           if (msg.sender !== me && !msg.read) count++;
-         });
-       }
-     });
-   this.unreadDmCount = count;
+    let count = 0;
+    Object.entries(dms)
+      .filter(([id]) => {
+        const parts = id.split('_');
+        return parts.length === 2 && (parts[0] === me || parts[1] === me);
+      })
+      .forEach(([, thread]) => {
+        if (thread.messages) {
+          Object.values(thread.messages).forEach(msg => {
+            if (msg.sender !== me && !msg.read) count++;
+          });
+        }
+      });
+    this.unreadDmCount = count;
   },
 
   applyAccent(color) {
@@ -2447,10 +2494,10 @@ const App = {
       const b = parseInt(hex.slice(5,7),16);
       return `rgba(${r},${g},${b},${a})`;
     };
-    const r = document.documentElement;
-    r.style.setProperty('--accent', color);
-    r.style.setProperty('--accent-dim', hex2rgba(color, 0.12));
-    r.style.setProperty('--accent-glow', hex2rgba(color, 0.25));
+    const root = document.documentElement;
+    root.style.setProperty('--accent', color);
+    root.style.setProperty('--accent-dim', hex2rgba(color, 0.12));
+    root.style.setProperty('--accent-glow', hex2rgba(color, 0.25));
   },
 
   async refreshNotifCount() {
@@ -2473,11 +2520,21 @@ const App = {
   },
 
   logout() {
-    db.del(`/sessions/${this._token}`);
+    if (this._token) db.del(`/sessions/${this._token}`);
     localStorage.removeItem('authToken');
     localStorage.removeItem('username');
-    this._me = null;
+    this._me    = null;
     this._token = null;
+    // Reset all per-session state so re-login works cleanly (#9)
+    feedInitialized   = false;
+    dmInitialized     = false;
+    groupsInitialized = false;
+    settingsInitialized = false;
+    renderedPostIds.clear();
+    usersCache = {};
+    loadUserCache._lastFetch = 0;
+    currentConvo  = null;
+    currentGroup  = null;
     navigate('auth');
   }
 };
@@ -2486,7 +2543,7 @@ const App = {
 // UTILS
 // ============================================================
 function esc(s) {
-  if (!s) return '';
+  if (s == null) return '';
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
@@ -2509,15 +2566,11 @@ function fmtTime(ts) {
   return new Date(ts).toLocaleString();
 }
 
-function avatarEl(user, data, size = 38) {
-  const initial = user ? user[0].toUpperCase() : '?';
-  // Support URL-based avatars (avatarUrl field) - passed as data param
-  if (data && data.startsWith('http')) {
-    return `<img src="${esc(data)}" alt="${esc(user)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.style.display='none'">`;
-  }
-  if (data) {
-    const mime = data.startsWith('/') ? 'image/jpeg' : 'image/webp';
-    return `<img src="data:${mime};base64,${data}" alt="${esc(user)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`;
+// Fix #5, #6: avatarEl now exclusively uses avatarUrl (URL-based only, no base64)
+function avatarEl(username, avatarUrl, size = 38) {
+  const initial = username ? username[0].toUpperCase() : '?';
+  if (avatarUrl) {
+    return `<img src="${esc(avatarUrl)}" alt="${esc(username)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.style.display='none'">`;
   }
   return initial;
 }
@@ -2539,7 +2592,6 @@ async function followUser(target) {
   if (me === target) return;
   await db.set(`/users/${me}/following/${target}`, true);
   await db.set(`/users/${target}/followers/${me}`, true);
-  // notification
   await pushNotif(target, 'follow', { from: me });
   toast(`Followed @${target}`, 'success');
 }
@@ -2552,14 +2604,13 @@ async function unfollowUser(target) {
 }
 
 async function pushNotif(to, type, data = {}) {
-  const settings = App.settings;
-  if (type === 'like' && !settings.notifLikes) return;
-  if (type === 'comment' && !settings.notifComments) return;
-  if (type === 'follow' && !settings.notifFollows) return;
-  if (type === 'mention' && !settings.notifMentions) return;
+  const s = App.settings;
+  if (type === 'like'    && !s.notifLikes)    return;
+  if (type === 'comment' && !s.notifComments) return;
+  if (type === 'follow'  && !s.notifFollows)  return;
+  if (type === 'mention' && !s.notifMentions) return;
   await db.push(`/notifications/${to}`, {
-    type,
-    ...data,
+    type, ...data,
     read: false,
     createdAt: new Date().toISOString()
   });
@@ -2585,7 +2636,7 @@ async function pushNotif(to, type, data = {}) {
 
   loginForm.onsubmit = async e => {
     e.preventDefault();
-    const u = document.getElementById('loginUsername').value.trim();
+    const u = document.getElementById('loginUsername').value.trim().toLowerCase();
     const p = document.getElementById('loginPassword').value;
     const err = document.getElementById('loginError');
     err.classList.remove('show');
@@ -2609,26 +2660,27 @@ async function pushNotif(to, type, data = {}) {
     await db.set(`/sessions/${token}`, { username: u, createdAt: new Date().toISOString() });
     localStorage.setItem('authToken', token);
     localStorage.setItem('username', u);
-    // Boot directly — don't call App.init() which may re-read stale state
-    App._me    = u;
-    App._token = token;
-    App.isAdmin     = !!user.isAdmin;
-    App.displayName = user.displayName || u;
-    App.mutedUsers  = user.muted || {};
+
+    App._me     = u;
+    App._token  = token;
+    App.isAdmin      = !!user.isAdmin;
+    App.displayName  = user.displayName || u;
+    App.mutedUsers   = user.muted || {};
     if (user.settings) Object.assign(App.settings, user.settings);
     App.applyAccent(App.settings.accent || '#f97316');
     if (App.settings.compact) document.body.classList.add('compact');
-    await loadUserCache();
+    await loadUserCache(true);
     await App.refreshNotifCount();
+    await App.refreshDmCount();
     navigate('feed');
   };
 
   signupForm.onsubmit = async e => {
     e.preventDefault();
-    const u    = document.getElementById('signupUsername').value.trim().toLowerCase();
-    const p    = document.getElementById('signupPassword').value;
-    const p2   = document.getElementById('signupConfirm').value;
-    const err  = document.getElementById('signupError');
+    const u   = document.getElementById('signupUsername').value.trim().toLowerCase();
+    const p   = document.getElementById('signupPassword').value;
+    const p2  = document.getElementById('signupConfirm').value;
+    const err = document.getElementById('signupError');
     err.classList.remove('show');
 
     if (!u || !p || !p2) { err.textContent = 'Fill in all fields.'; err.classList.add('show'); return; }
@@ -2653,7 +2705,7 @@ async function pushNotif(to, type, data = {}) {
       displayName: u,
       passwordHash: hash,
       bio: '',
-      avatar: '',
+      avatarUrl: '',
       isAdmin: false,
       createdAt: new Date().toISOString(),
       settings: {},
@@ -2672,7 +2724,7 @@ async function pushNotif(to, type, data = {}) {
     App.isAdmin     = false;
     App.displayName = u;
     App.mutedUsers  = {};
-    await loadUserCache();
+    await loadUserCache(true);
     navigate('feed');
   };
 })();
@@ -2680,23 +2732,31 @@ async function pushNotif(to, type, data = {}) {
 // ============================================================
 // FEED
 // ============================================================
-let feedInterval = null;
-let feedInitialized = false;
-let quotingPostId = null;
-let usersCache = {};
+let feedInterval    = null;
+let feedInitialized = false;  // Reset on logout (#9)
+let quotingPostId   = null;
+let usersCache      = {};
 let renderedPostIds = new Set();
 
-async function loadUserCache(force=false) {
-  // TTL cache — only re-fetch every 60s, not on every poll
-  if (!force && loadUserCache._lastFetch && Date.now()-loadUserCache._lastFetch < 60000 && Object.keys(usersCache).length) return;
+async function loadUserCache(force = false) {
+  // TTL cache — re-fetch at most every 60s unless forced
+  if (!force && loadUserCache._lastFetch && Date.now() - loadUserCache._lastFetch < 60000 && Object.keys(usersCache).length) return;
   const users = await db.get('/users');
-  if (users) { usersCache = users; loadUserCache._lastFetch = Date.now(); }
+  if (users) {
+    // Strip passwordHash from cache to avoid it sitting in memory needlessly
+    for (const u of Object.keys(users)) {
+      delete users[u].passwordHash;
+    }
+    usersCache = users;
+    loadUserCache._lastFetch = Date.now();
+  }
 }
+loadUserCache._lastFetch = 0;
 
 function initFeed() {
   if (feedInterval) { clearInterval(feedInterval); feedInterval = null; }
 
-  // Only bind compose handlers once
+  // Fix #9: feedInitialized is reset on logout, so handlers are rebound on re-login
   if (!feedInitialized) {
     feedInitialized = true;
     quotingPostId = null;
@@ -2719,8 +2779,34 @@ function initFeed() {
     };
   }
 
-  loadFeed(true); // first load — animate
-  feedInterval = setInterval(() => loadFeed(false), 10000);
+  // Fix #21: show skeleton while loading
+  const container = document.getElementById('feedPosts');
+  if (container && !renderedPostIds.size) {
+    container.innerHTML = Array(4).fill(0).map(() => `
+      <div class="feed-skeleton">
+        <div class="sk-row">
+          <div class="sk-avatar skeleton"></div>
+          <div class="sk-lines">
+            <div class="sk-line skeleton" style="width:40%"></div>
+            <div class="sk-line skeleton" style="width:20%"></div>
+          </div>
+        </div>
+        <div class="sk-body skeleton" style="width:90%"></div>
+        <div class="sk-body skeleton" style="width:70%"></div>
+      </div>
+    `).join('');
+  }
+
+  loadFeed(true);
+  feedInterval = setInterval(async () => {
+    await loadFeed(false);
+    // Fix #20: refresh DM badge on every feed poll tick
+    await App.refreshDmCount();
+    // Refresh notif count periodically too
+    await App.refreshNotifCount();
+    // Re-render sidebar badges
+    renderSidebar('sidebar', 'feed');
+  }, 10000);
   pageIntervals['feed'] = feedInterval;
 }
 
@@ -2742,7 +2828,6 @@ async function loadFeed(firstLoad = false) {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   if (firstLoad) {
-    // Full render with stagger animation
     container.innerHTML = '';
     renderedPostIds.clear();
     arr.forEach((post, i) => {
@@ -2755,8 +2840,7 @@ async function loadFeed(firstLoad = false) {
       renderedPostIds.add(post.id);
     });
   } else {
-    // Incremental — add new posts at top, update counts on existing, remove deleted
-    // NO full re-render = NO animation replay
+    // Incremental: prepend genuinely new posts, update counts on existing
     const newPosts = arr.filter(p => !renderedPostIds.has(p.id));
     newPosts.forEach(post => {
       const el = renderPost(post);
@@ -2765,6 +2849,7 @@ async function loadFeed(firstLoad = false) {
       renderedPostIds.add(post.id);
     });
     arr.forEach(p => updatePostCounts(p));
+    // Remove deleted
     container.querySelectorAll('.post-item[data-postid]').forEach(el => {
       if (!arr.find(p => p.id === el.dataset.postid)) {
         el.remove(); renderedPostIds.delete(el.dataset.postid);
@@ -2794,25 +2879,24 @@ function renderPost(post) {
   let quoteHtml = '';
   if (post.quoteOf) {
     const qp = post.quoteData || {};
-    quoteHtml = `<div class="quote-block" onclick="scrollToPost('${esc(post.quoteOf)}')">
+    // Fix #16: scrollToPost is now defined; quote block uses data attribute
+    quoteHtml = `<div class="quote-block" data-quoteid="${esc(post.quoteOf)}">
       <div class="quote-author">↩ @${esc(qp.author || '?')}</div>
       <div class="quote-text">${esc((qp.content||'').slice(0,120))}${(qp.content||'').length > 120 ? '…' : ''}</div>
     </div>`;
   }
 
-  // Build avatar inline (no variable name collision with avatarEl function)
-  const authorAvatar = user.avatar
-    ? `<img src="data:image/webp;base64,${user.avatar}" alt="${esc(post.author)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`
-    : (post.author ? post.author[0].toUpperCase() : '?');
+  // Fix #5, #6: use avatarUrl from user record only
+  const authorAvatarHtml = avatarEl(post.author, user.avatarUrl || null, 38);
 
   wrap.innerHTML = `
     <div class="post-header">
-      <div class="post-avatar" onclick="navigate('profile',{user:'${esc(post.author)}'})">
-        ${authorAvatar}
+      <div class="post-avatar" data-profile="${esc(post.author)}">
+        ${authorAvatarHtml}
       </div>
       <div class="post-meta">
         <div style="display:flex;align-items:center;gap:6px;">
-          <span class="post-author" onclick="navigate('profile',{user:'${esc(post.author)}'})">
+          <span class="post-author" data-profile="${esc(post.author)}">
             ${esc(user.displayName || post.author)}
           </span>
           <span class="text-muted text-xs">@${esc(post.author)}</span>
@@ -2820,7 +2904,7 @@ function renderPost(post) {
         <div class="post-time">${fmtTime(post.createdAt)}</div>
       </div>
       <div class="post-more">
-        <button class="post-menu-btn" data-postid="${esc(post.id)}">⋯</button>
+        <button class="post-menu-btn" aria-label="Post options">⋯</button>
       </div>
     </div>
     <div class="post-body">${esc(post.content)}</div>
@@ -2842,28 +2926,58 @@ function renderPost(post) {
     <div class="comments-section" id="comments-${esc(post.id)}"></div>
   `;
 
-  // Event delegation
+  // Fix #4: all user-data driven navigation uses data attributes + JS, no inline onclick
   wrap.addEventListener('click', e => {
-    const btn = e.target.closest('[data-action]');
-    if (btn) handlePostAction(btn.dataset.action, btn.dataset.postid, btn.dataset.postcontent, btn.dataset.postauthor, btn, post);
+    // Profile navigation via data-profile
+    const profileEl = e.target.closest('[data-profile]');
+    if (profileEl && !e.target.closest('[data-action]') && !e.target.closest('.post-menu-btn')) {
+      navigate('profile', { user: profileEl.dataset.profile });
+      return;
+    }
 
-    const menuBtn = e.target.closest('[data-postid].post-menu-btn');
+    // Quote block scroll
+    const quoteBlock = e.target.closest('.quote-block[data-quoteid]');
+    if (quoteBlock) {
+      scrollToPost(quoteBlock.dataset.quoteid);
+      return;
+    }
+
+    // Action buttons
+    const btn = e.target.closest('[data-action]');
+    if (btn) {
+      handlePostAction(btn.dataset.action, btn.dataset.postid, btn.dataset.postcontent, btn.dataset.postauthor, btn, post);
+      return;
+    }
+
+    // Menu button
+    const menuBtn = e.target.closest('.post-menu-btn');
     if (menuBtn) showPostMenu(menuBtn, post, user);
   });
 
   return wrap;
 }
 
-// Update only reaction counts on an already-rendered post (no re-render = no animation replay)
+// Fix #16: scrollToPost actually implemented
+function scrollToPost(postId) {
+  const el = document.querySelector(`.post-item[data-postid="${CSS.escape(postId)}"]`);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.style.transition = 'background 0.3s ease';
+    el.style.background = 'var(--accent-dim)';
+    setTimeout(() => { el.style.background = ''; }, 1200);
+  }
+}
+
+// Fix #8: updatePostCounts also toggles liked/loved CSS class for current user
 function updatePostCounts(post) {
-  const el = document.querySelector(`.post-item[data-postid="${post.id}"]`);
+  const el = document.querySelector(`.post-item[data-postid="${CSS.escape(post.id)}"]`);
   if (!el) return;
   const me = App.me();
   const likes    = post.likes    ? Object.keys(post.likes).length    : 0;
   const loves    = post.loves    ? Object.keys(post.loves).length    : 0;
   const comments = post.comments ? Object.keys(post.comments).length : 0;
-  const likeBtn = el.querySelector('[data-action="like"]');
-  const loveBtn = el.querySelector('[data-action="love"]');
+  const likeBtn  = el.querySelector('[data-action="like"]');
+  const loveBtn  = el.querySelector('[data-action="love"]');
   if (likeBtn) {
     likeBtn.querySelector('.like-count').textContent = likes;
     likeBtn.classList.toggle('liked', !!(post.likes && post.likes[me]));
@@ -2880,22 +2994,32 @@ async function handlePostAction(action, postId, content, author, btn, post) {
   const me = App.me();
   switch(action) {
     case 'like': {
-      const cur = await db.get(`/posts/${postId}/likes/${me}`);
-      if (cur) { await db.del(`/posts/${postId}/likes/${me}`); }
-      else {
+      // Fix #8: optimistic local toggle to prevent double-tap race
+      const isLiked = btn.classList.contains('liked');
+      btn.classList.toggle('liked', !isLiked);
+      if (isLiked) {
+        await db.del(`/posts/${postId}/likes/${me}`);
+      } else {
         await db.set(`/posts/${postId}/likes/${me}`, true);
         if (post.author !== me) await pushNotif(post.author, 'like', { from: me, postId });
       }
-      loadFeed(); break;
+      // Fetch updated post and sync counts
+      const updated = await db.get(`/posts/${postId}`);
+      if (updated) updatePostCounts({ ...updated, id: postId });
+      break;
     }
     case 'love': {
-      const cur = await db.get(`/posts/${postId}/loves/${me}`);
-      if (cur) { await db.del(`/posts/${postId}/loves/${me}`); }
-      else {
+      const isLoved = btn.classList.contains('loved');
+      btn.classList.toggle('loved', !isLoved);
+      if (isLoved) {
+        await db.del(`/posts/${postId}/loves/${me}`);
+      } else {
         await db.set(`/posts/${postId}/loves/${me}`, true);
         if (post.author !== me) await pushNotif(post.author, 'love', { from: me, postId });
       }
-      loadFeed(); break;
+      const updated = await db.get(`/posts/${postId}`);
+      if (updated) updatePostCounts({ ...updated, id: postId });
+      break;
     }
     case 'comment': {
       const sec = document.getElementById(`comments-${postId}`);
@@ -2934,16 +3058,27 @@ function showPostMenu(btn, post, user) {
       if (await confirm2('Delete post', 'This cannot be undone.')) {
         await db.set(`/posts/${post.id}/deleted`, true);
         toast('Post deleted', 'success');
-        loadFeed();
+        loadFeed(true);
       }
     }, cls: 'danger' });
   } else {
     const isMuted = !!App.mutedUsers[post.author];
-    items.push({ label: isMuted ? '🔊 Unmute @' + post.author : '🔇 Mute @' + post.author,
-      action: () => isMuted ? App.unmuteUser(post.author) : App.muteUser(post.author) });
-
-    const isFollowing = false; // async check would be needed
-    items.push({ label: '👤 View profile', action: () => navigate('profile', {user: post.author}) });
+    items.push({
+      label: isMuted ? '🔊 Unmute @' + post.author : '🔇 Mute @' + post.author,
+      action: () => isMuted ? App.unmuteUser(post.author) : App.muteUser(post.author)
+    });
+    // Fix #18: show follow/unfollow — read from usersCache which we have
+    const meData = usersCache[me] || {};
+    const isFollowing = !!(meData.following && meData.following[post.author]);
+    items.push({
+      label: isFollowing ? '➖ Unfollow @' + post.author : '➕ Follow @' + post.author,
+      action: async () => {
+        if (isFollowing) await unfollowUser(post.author);
+        else await followUser(post.author);
+        await loadUserCache(true);
+      }
+    });
+    items.push({ label: '👤 View profile', action: () => navigate('profile', { user: post.author }) });
     items.push({ label: '✉️ Message', action: () => { navigate('dm'); startDmWith(post.author); } });
   }
 
@@ -2957,7 +3092,7 @@ function showPostMenu(btn, post, user) {
 
   const rect = btn.getBoundingClientRect();
   menu.style.top  = `${rect.bottom + 4}px`;
-  menu.style.left = `${rect.right - 160}px`;
+  menu.style.left = `${Math.max(0, rect.right - 180)}px`;
   document.body.appendChild(menu);
 
   setTimeout(() => {
@@ -2975,7 +3110,7 @@ function openEditPost(post) {
     await db.set(`/posts/${post.id}/editedAt`, new Date().toISOString());
     closeModal('editPostModal');
     toast('Post updated', 'success');
-    loadFeed();
+    loadFeed(true);
   };
 }
 
@@ -2993,8 +3128,9 @@ async function loadComments(postId) {
 
   let html = arr.map(c => {
     const u = usersCache[c.author] || {};
+    // Fix #5: use avatarUrl
     return `<div class="comment-item">
-      <div class="comment-avatar">${avatarEl(c.author, u.avatar, 28)}</div>
+      <div class="comment-avatar">${avatarEl(c.author, u.avatarUrl || null, 28)}</div>
       <div class="comment-body">
         <div class="comment-author">${esc(u.displayName || c.author)}</div>
         <div class="comment-text">${esc(c.text)}</div>
@@ -3004,11 +3140,12 @@ async function loadComments(postId) {
   }).join('');
 
   html += `<div class="comment-input-row">
-    <input class="input" id="cinput-${postId}" placeholder="Add a comment…" maxlength="500" style="flex:1">
-    <button class="btn btn-primary btn-sm" onclick="submitComment('${postId}')">Post</button>
+    <input class="input" id="cinput-${esc(postId)}" placeholder="Add a comment…" maxlength="500" style="flex:1">
+    <button class="btn btn-primary btn-sm" data-comment-postid="${esc(postId)}">Post</button>
   </div>`;
 
   sec.innerHTML = html;
+  sec.querySelector(`[data-comment-postid]`).addEventListener('click', () => submitComment(postId));
 }
 
 async function submitComment(postId) {
@@ -3024,11 +3161,9 @@ async function submitComment(postId) {
     createdAt: new Date().toISOString()
   });
 
-  // Notify post author
   const post = await db.get(`/posts/${postId}`);
   if (post && post.author !== me) {
     await pushNotif(post.author, 'comment', { from: me, postId });
-    // Check mentions
     const mentions = text.match(/@(\w+)/g);
     if (mentions) {
       for (const m of mentions) {
@@ -3039,7 +3174,9 @@ async function submitComment(postId) {
   }
 
   loadComments(postId);
-  await loadFeed();
+  // Refresh just this post's comment count without full re-render
+  const updated = await db.get(`/posts/${postId}`);
+  if (updated) updatePostCounts({ ...updated, id: postId });
 }
 
 async function submitPost() {
@@ -3061,13 +3198,12 @@ async function submitPost() {
 
   if (quotingPostId) {
     const qp = await db.get(`/posts/${quotingPostId}`);
-    postData.quoteOf = quotingPostId;
+    postData.quoteOf   = quotingPostId;
     postData.quoteData = { author: qp.author, content: qp.content };
   }
 
   await db.set(`/posts/${id}`, postData);
 
-  // Mentions
   const mentions = content.match(/@(\w+)/g);
   if (mentions) {
     for (const m of mentions) {
@@ -3079,11 +3215,11 @@ async function submitPost() {
   txt.value = '';
   document.getElementById('postCharCount').textContent = '0 / 1000';
   quotingPostId = null;
-  document.getElementById('quoteBtn').style.display = 'none';
+  document.getElementById('quoteBtn').style.display    = 'none';
   document.getElementById('quotingPreview').style.display = 'none';
   btn.disabled = false;
 
-  await loadFeed();
+  await loadFeed(true);
   toast('Posted!', 'success');
 }
 
@@ -3093,15 +3229,16 @@ async function submitPost() {
 let dmInterval    = null;
 let currentConvo  = null;
 let typingTimeout = null;
-let dmInitialized = false;
+let dmInitialized = false;  // Reset on logout (#9)
 let dmMsgCount    = 0;
 
+// Fix #7: convoId uses consistent alphabetical ordering (already correct), 
+// but the filter now strictly checks for exactly 2 parts
 function convoId(a, b) { return a < b ? `${a}_${b}` : `${b}_${a}`; }
 
 function initDMs() {
   if (dmInterval) { clearInterval(dmInterval); dmInterval = null; }
 
-  // Bind listeners only once — re-binding stacks handlers
   if (!dmInitialized) {
     dmInitialized = true;
 
@@ -3129,9 +3266,12 @@ function initDMs() {
   }
 
   loadConvoList();
-  dmInterval = setInterval(() => {
+  dmInterval = setInterval(async () => {
     loadConvoList();
     if (currentConvo) loadDmThread(currentConvo);
+    // Fix #20: keep DM badge fresh during DM page polling
+    await App.refreshDmCount();
+    renderSidebar('sidebar-dm', 'dm');
   }, 4000);
   pageIntervals['dm'] = dmInterval;
 }
@@ -3149,30 +3289,31 @@ async function loadConvoList() {
   if (!list) return;
 
   if (!dms) { list.innerHTML = '<div class="text-muted text-sm" style="padding:8px;">No conversations yet</div>'; return; }
-   
-   const convoMap = new Map();
-   Object.entries(dms)
-     .filter(([id]) => {
-       const parts = id.split('_');
-       return parts.length === 2 && (parts[0] === me || parts[1] === me);
-     })
-     .forEach(([id, data]) => {
-       const msgs = data.messages ? Object.values(data.messages) : [];
-       const last = msgs.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
-       const other = id.startsWith(me + '_') ? id.slice(me.length + 1) : id.slice(0, id.length - me.length - 1);
-       // If duplicate, keep the one with the more recent message
-       const existing = convoMap.get(other);
-       if (!existing || (last && (!existing.last || new Date(last.createdAt) > new Date(existing.last.createdAt)))) {
-         convoMap.set(other, { id, other, last, unread: last && last.sender !== me && !last.read });
-       }
-     });
-   
-   const convos = Array.from(convoMap.values())
-     .sort((a,b) => {
-       if (!a.last) return 1;
-       if (!b.last) return -1;
-       return new Date(b.last.createdAt) - new Date(a.last.createdAt);
-     });
+
+  // Fix #7: strictly require exactly 2 underscore-separated parts both matching me
+  const convoMap = new Map();
+  Object.entries(dms)
+    .filter(([id]) => {
+      const parts = id.split('_');
+      return parts.length === 2 && (parts[0] === me || parts[1] === me);
+    })
+    .forEach(([id, data]) => {
+      const parts  = id.split('_');
+      const other  = parts[0] === me ? parts[1] : parts[0];
+      const msgs   = data.messages ? Object.values(data.messages) : [];
+      const last   = msgs.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+      const existing = convoMap.get(other);
+      if (!existing || (last && (!existing.last || new Date(last.createdAt) > new Date(existing.last.createdAt)))) {
+        convoMap.set(other, { id, other, last, unread: !!(last && last.sender !== me && !last.read) });
+      }
+    });
+
+  const convos = Array.from(convoMap.values())
+    .sort((a, b) => {
+      if (!a.last) return 1;
+      if (!b.last) return -1;
+      return new Date(b.last.createdAt) - new Date(a.last.createdAt);
+    });
 
   list.innerHTML = '';
   convos.forEach(c => {
@@ -3180,27 +3321,28 @@ async function loadConvoList() {
     const el = document.createElement('div');
     el.className = 'convo-item' + (currentConvo === c.other ? ' active' : '');
     el.innerHTML = `
-      <div class="post-avatar" style="width:34px;height:34px;font-size:12px;">${avatarEl(c.other, u.avatar, 34)}</div>
+      <div class="post-avatar" style="width:34px;height:34px;font-size:12px;">${avatarEl(c.other, u.avatarUrl || null, 34)}</div>
       <div class="convo-info">
         <div class="convo-name">${esc(u.displayName || c.other)}</div>
         <div class="convo-preview">${c.last ? esc((c.last.text||'').slice(0,35)) : 'No messages yet'}</div>
       </div>
       ${c.unread ? '<span class="unread-dot"></span>' : ''}
     `;
-    el.onclick = () => openConvo(c.other);
+    el.addEventListener('click', () => openConvo(c.other));
     list.appendChild(el);
   });
 }
 
 async function openConvo(other) {
   currentConvo = other;
-  dmMsgCount   = 0; // force re-render
+  dmMsgCount   = 0;
   document.getElementById('dmEmptyState').style.display = 'none';
   const activePane = document.getElementById('dmActiveThread');
   activePane.style.display = 'flex';
 
   const u = usersCache[other] || {};
   document.getElementById('dmThreadTitle').textContent = u.displayName || other;
+  // Fix #22: check current window width at open time, resize listener handles changes
   document.getElementById('dmBackBtn').style.display = window.innerWidth <= 768 ? 'inline-flex' : 'none';
 
   await loadDmThread(other);
@@ -3209,7 +3351,7 @@ async function openConvo(other) {
 }
 
 async function loadDmThread(other) {
-  const me = App.me();
+  const me  = App.me();
   const cid = convoId(me, other);
   const data = await db.get(`/dms/${cid}/messages`);
 
@@ -3233,9 +3375,8 @@ async function loadDmThread(other) {
     return;
   }
 
-  const msgs = Object.values(data).sort((a,b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const msgs = Object.values(data).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-  // Only re-render if message count changed — no animation replay
   if (msgs.length === dmMsgCount) return;
   dmMsgCount = msgs.length;
 
@@ -3256,7 +3397,7 @@ async function sendDm() {
   const text = inp.value.trim();
   if (!text || !currentConvo) return;
 
-  const me = App.me();
+  const me  = App.me();
   const cid = convoId(me, currentConvo);
   inp.value = '';
 
@@ -3264,16 +3405,14 @@ async function sendDm() {
     sender: me, text, createdAt: new Date().toISOString(), read: false
   });
 
-  // Clear typing
   await db.del(`/dms/${cid}/typing/${me}`);
-
-  dmMsgCount = 0; // force re-render
+  dmMsgCount = 0;
   loadDmThread(currentConvo);
 }
 
 async function handleTyping() {
   if (!currentConvo) return;
-  const me = App.me();
+  const me  = App.me();
   const cid = convoId(me, currentConvo);
   await db.set(`/dms/${cid}/typing/${me}`, new Date().toISOString());
   clearTimeout(typingTimeout);
@@ -3283,15 +3422,14 @@ async function handleTyping() {
 // ============================================================
 // GROUPS
 // ============================================================
-let groupInterval    = null;
-let currentGroup     = null;
-let groupsInitialized = false;
-let groupMsgCount    = 0;
+let groupInterval     = null;
+let currentGroup      = null;
+let groupsInitialized = false;  // Reset on logout (#9)
+let groupMsgCount     = 0;
 
 function initGroups() {
   if (groupInterval) { clearInterval(groupInterval); groupInterval = null; }
 
-  // Bind event listeners only once
   if (!groupsInitialized) {
     groupsInitialized = true;
     document.getElementById('newGroupBtn').onclick    = () => openModal('newGroupModal');
@@ -3334,14 +3472,14 @@ async function loadGroupsList() {
         <div class="group-meta">${Object.keys(g.members||{}).length} members</div>
       </div>
     `;
-    el.onclick = () => openGroup(g);
+    el.addEventListener('click', () => openGroup(g));
     list.appendChild(el);
   });
 }
 
 async function openGroup(group) {
   currentGroup  = group.id;
-  groupMsgCount = 0; // force re-render on open
+  groupMsgCount = 0;
 
   document.getElementById('groupEmptyState').style.display  = 'none';
   document.getElementById('groupActivePane').style.display   = 'flex';
@@ -3356,7 +3494,7 @@ async function openGroup(group) {
 
 async function loadGroupMessages(groupId, firstLoad = false) {
   const msgs = await db.get(`/groups/${groupId}/messages`);
-  const box = document.getElementById('groupMessages');
+  const box  = document.getElementById('groupMessages');
   if (!box) return;
   await loadUserCache();
 
@@ -3366,9 +3504,8 @@ async function loadGroupMessages(groupId, firstLoad = false) {
     return;
   }
 
-  const arr = Object.values(msgs).sort((a,b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const arr = Object.values(msgs).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-  // Only re-render if message count changed — prevents animation replay on poll
   if (!firstLoad && arr.length === groupMsgCount) return;
   groupMsgCount = arr.length;
 
@@ -3376,12 +3513,11 @@ async function loadGroupMessages(groupId, firstLoad = false) {
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
 
   box.innerHTML = arr.map(m => {
-    const u = usersCache[m.author] || {};
-    const av = u.avatar
-      ? `<img src="data:image/webp;base64,${u.avatar}" alt="${esc(m.author)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`
-      : (m.author ? m.author[0].toUpperCase() : '?');
+    const u  = usersCache[m.author] || {};
+    // Fix #5: avatarUrl only
+    const av = avatarEl(m.author, u.avatarUrl || null, 32);
     return `<div class="group-message">
-      <div class="post-avatar" style="width:32px;height:32px;font-size:11px;" onclick="navigate('profile',{user:'${esc(m.author)}'})">
+      <div class="post-avatar" style="width:32px;height:32px;font-size:11px;cursor:pointer;" data-profile="${esc(m.author)}">
         ${av}
       </div>
       <div class="group-msg-body">
@@ -3392,11 +3528,16 @@ async function loadGroupMessages(groupId, firstLoad = false) {
     </div>`;
   }).join('');
 
+  // Fix #4: bind profile navigation via JS not inline onclick
+  box.querySelectorAll('[data-profile]').forEach(el => {
+    el.addEventListener('click', () => navigate('profile', { user: el.dataset.profile }));
+  });
+
   if (atBottom || firstLoad) box.scrollTop = box.scrollHeight;
 }
 
 async function sendGroupMsg() {
-  const inp = document.getElementById('groupInput');
+  const inp  = document.getElementById('groupInput');
   const text = inp.value.trim();
   if (!text || !currentGroup) return;
 
@@ -3405,19 +3546,19 @@ async function sendGroupMsg() {
   await db.push(`/groups/${currentGroup}/messages`, {
     author: me, text, createdAt: new Date().toISOString()
   });
-  groupMsgCount = 0; // force re-render
+  groupMsgCount = 0;
   loadGroupMessages(currentGroup, false);
 }
 
 async function createGroup() {
-  const name = document.getElementById('groupNameInput').value.trim();
-  const privacy = document.getElementById('groupPrivacyInput').value;
+  const name       = document.getElementById('groupNameInput').value.trim();
+  const privacy    = document.getElementById('groupPrivacyInput').value;
   const membersRaw = document.getElementById('groupMembersInput').value;
   const me = App.me();
 
   if (!name) { toast('Group name required', 'error'); return; }
 
-  const members = { [me]: 'admin' };
+  const members  = { [me]: 'admin' };
   const invitees = membersRaw.split(',').map(u => u.trim().toLowerCase()).filter(Boolean);
   for (const u of invitees) {
     if (u === me) continue;
@@ -3434,7 +3575,7 @@ async function createGroup() {
 
   await log('create_group', { groupId: gid, name });
   closeModal('newGroupModal');
-  document.getElementById('groupNameInput').value = '';
+  document.getElementById('groupNameInput').value   = '';
   document.getElementById('groupMembersInput').value = '';
   toast(`Group "${name}" created`, 'success');
   loadGroupsList();
@@ -3467,86 +3608,82 @@ async function leaveGroup() {
 // ============================================================
 // PROFILE
 // ============================================================
+// Fix #14: profileTab reset per-profile visit
 let profileTab = 'posts';
 
 async function initProfile(viewUser) {
+  // Fix #14: always reset to 'posts' tab when navigating to a profile
+  profileTab = 'posts';
+  document.querySelectorAll('.profile-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === 'posts');
+  });
+
   const target = viewUser || App.me();
-  const me = App.me();
+  const me     = App.me();
 
   const user = await db.get(`/users/${target}`);
   if (!user) { toast('User not found', 'error'); navigate('feed'); return; }
 
-  // Banner
   const profileAvEl = document.getElementById('profileAvatarEl');
   profileAvEl.innerHTML = '';
-  if (user.avatar) {
-    profileAvEl.innerHTML = `<img src="data:image/webp;base64,${user.avatar}" alt="${esc(target)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`;
+
+  // Fix #5: avatarUrl only
+  if (user.avatarUrl) {
+    profileAvEl.innerHTML = `<img src="${esc(user.avatarUrl)}" alt="${esc(target)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.style.display='none'">`;
   } else {
     profileAvEl.textContent = (target[0]||'?').toUpperCase();
-    if (target === me) {
-      const ov = document.createElement('div');
-      ov.className = 'avatar-upload-overlay'; ov.id = 'avatarUploadOverlay'; ov.textContent = '📷';
-      profileAvEl.appendChild(ov);
-    }
+  }
+
+  if (target === me) {
+    // Own profile — avatar upload overlay
+    const ov = document.createElement('div');
+    ov.className = 'avatar-upload-overlay'; ov.id = 'avatarUploadOverlay'; ov.textContent = '📷';
+    profileAvEl.appendChild(ov);
+    document.getElementById('avatarUploadOverlay').onclick = () =>
+      document.getElementById('avatarFileInput').click();
+    document.getElementById('avatarFileInput').onchange = async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      toast('Use the avatar URL field in Settings to update your avatar', 'info');
+      e.target.value = '';
+    };
   }
 
   document.getElementById('profileDisplayName').textContent = user.displayName || target;
   document.getElementById('profileHandle').textContent = `@${target}`;
-  document.getElementById('profileBioEl').textContent = user.bio || '';
+  document.getElementById('profileBioEl').textContent  = user.bio || '';
 
   const followers = Object.keys(user.followers || {}).length;
   const following = Object.keys(user.following || {}).length;
 
   const statsEl = document.getElementById('profileStats');
+  // Fix #4: use data attributes for follow list navigation
   statsEl.innerHTML = `
-    <span class="profile-stat" onclick="showFollowList('${target}','followers')"><strong>${followers}</strong> followers</span>
-    <span class="profile-stat" onclick="showFollowList('${target}','following')"><strong>${following}</strong> following</span>
+    <span class="profile-stat" data-followlist="${esc(target)}" data-followtype="followers"><strong>${followers}</strong> followers</span>
+    <span class="profile-stat" data-followlist="${esc(target)}" data-followtype="following"><strong>${following}</strong> following</span>
   `;
+  statsEl.querySelectorAll('[data-followlist]').forEach(el => {
+    el.addEventListener('click', () => showFollowList(el.dataset.followlist, el.dataset.followtype));
+  });
 
   const actionsRow = document.getElementById('profileActionsRow');
   actionsRow.innerHTML = '';
 
-  if (target === me) {
-    // Own profile — avatar upload
-    const avatarWrap = document.getElementById('profileAvatarEl');
-    if (!avatarWrap.querySelector('.avatar-upload-overlay')) {
-      const ov = document.createElement('div');
-      ov.className = 'avatar-upload-overlay';
-      ov.id = 'avatarUploadOverlay';
-      ov.textContent = '📷';
-      avatarWrap.appendChild(ov);
-    }
-    document.getElementById('avatarUploadOverlay').onclick = () =>
-      document.getElementById('avatarFileInput').click();
-
-    document.getElementById('avatarFileInput').onchange = async e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const compressed = await compressAvatar(file);
-      await db.set(`/users/${me}/avatar`, compressed);
-      App.avatarData = compressed;
-      document.getElementById('profileAvatarEl').innerHTML = `<img src="data:image/webp;base64,${compressed}" alt="">`;
-      // refresh sidebars
-      renderSidebar('sidebar-profile', 'profile');
-      toast('Avatar updated!', 'success');
-      await log('avatar_update');
-    };
-  } else {
-    // Follow / unfollow
-    const meData = await db.get(`/users/${me}`);
+  if (target !== me) {
+    const meData    = await db.get(`/users/${me}`);
     const isFollowing = meData && meData.following && meData.following[target];
     const followBtn = document.createElement('button');
-    followBtn.className = `btn ${isFollowing ? 'btn-ghost' : 'btn-primary'} btn-sm`;
+    followBtn.className   = `btn ${isFollowing ? 'btn-ghost' : 'btn-primary'} btn-sm`;
     followBtn.textContent = isFollowing ? 'Unfollow' : 'Follow';
     followBtn.onclick = async () => {
-      if (isFollowing) { await unfollowUser(target); }
-      else { await followUser(target); }
+      if (isFollowing) await unfollowUser(target);
+      else await followUser(target);
       initProfile(target);
     };
 
-    const muteBtn = document.createElement('button');
-    const isMuted = !!App.mutedUsers[target];
-    muteBtn.className = 'btn btn-ghost btn-sm';
+    const isMuted  = !!App.mutedUsers[target];
+    const muteBtn  = document.createElement('button');
+    muteBtn.className   = 'btn btn-ghost btn-sm';
     muteBtn.textContent = isMuted ? '🔊 Unmute' : '🔇 Mute';
     muteBtn.onclick = async () => {
       if (isMuted) await App.unmuteUser(target);
@@ -3555,7 +3692,7 @@ async function initProfile(viewUser) {
     };
 
     const msgBtn = document.createElement('button');
-    msgBtn.className = 'btn btn-ghost btn-sm';
+    msgBtn.className   = 'btn btn-ghost btn-sm';
     msgBtn.textContent = '✉️ Message';
     msgBtn.onclick = () => { navigate('dm'); startDmWith(target); };
 
@@ -3566,12 +3703,15 @@ async function initProfile(viewUser) {
 
   // Tabs
   document.querySelectorAll('.profile-tab').forEach(t => {
-    t.onclick = () => {
+    // Clone to remove any previously attached listener
+    const fresh = t.cloneNode(true);
+    t.replaceWith(fresh);
+    fresh.addEventListener('click', () => {
       document.querySelectorAll('.profile-tab').forEach(x => x.classList.remove('active'));
-      t.classList.add('active');
-      profileTab = t.dataset.tab;
+      fresh.classList.add('active');
+      profileTab = fresh.dataset.tab;
       loadProfileTab(target, profileTab);
-    };
+    });
   });
 
   loadProfileTab(target, 'posts');
@@ -3585,9 +3725,9 @@ async function loadProfileTab(target, tab) {
     const posts = await db.get('/posts');
     if (!posts) { el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">No posts yet</div></div>'; return; }
     const arr = Object.entries(posts)
-      .map(([id,p]) => ({...p,id}))
+      .map(([id, p]) => ({...p, id}))
       .filter(p => p.author === target && !p.deleted)
-      .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     if (!arr.length) { el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">No posts yet</div></div>'; return; }
     el.innerHTML = '';
@@ -3600,17 +3740,19 @@ async function loadProfileTab(target, tab) {
     await loadUserCache();
     el.innerHTML = '';
     users.forEach(u => {
-      const ud = usersCache[u] || {};
+      const ud   = usersCache[u] || {};
       const card = document.createElement('div');
       card.className = 'user-card';
       card.innerHTML = `
-        <div class="post-avatar" style="width:40px;height:40px;">${avatarEl(u, ud.avatar, 40)}</div>
+        <div class="post-avatar" style="width:40px;height:40px;">${avatarEl(u, ud.avatarUrl || null, 40)}</div>
         <div class="user-card-info">
           <div class="user-card-name">${esc(ud.displayName || u)}</div>
           <div class="user-card-bio">${esc((ud.bio||'').slice(0,60))}</div>
         </div>
-        <button class="btn btn-ghost btn-sm" onclick="navigate('profile',{user:'${esc(u)}'})">View</button>
+        <button class="btn btn-ghost btn-sm" data-nav-user="${esc(u)}">View</button>
       `;
+      // Fix #4
+      card.querySelector('[data-nav-user]').addEventListener('click', () => navigate('profile', { user: u }));
       el.appendChild(card);
     });
   }
@@ -3631,10 +3773,15 @@ async function showFollowList(target, type) {
     const el = document.createElement('div');
     el.className = 'user-card';
     el.innerHTML = `
-      <div class="post-avatar" style="width:36px;height:36px;font-size:13px;">${avatarEl(u, ud.avatar, 36)}</div>
+      <div class="post-avatar" style="width:36px;height:36px;font-size:13px;">${avatarEl(u, ud.avatarUrl || null, 36)}</div>
       <div class="user-card-info"><div class="user-card-name">${esc(ud.displayName || u)}</div></div>
-      <button class="btn btn-ghost btn-sm" onclick="closeModal('followListModal');navigate('profile',{user:'${esc(u)}'})">View</button>
+      <button class="btn btn-ghost btn-sm" data-nav-user="${esc(u)}">View</button>
     `;
+    // Fix #4
+    el.querySelector('[data-nav-user]').addEventListener('click', () => {
+      closeModal('followListModal');
+      navigate('profile', { user: u });
+    });
     content.appendChild(el);
   });
 
@@ -3642,42 +3789,29 @@ async function showFollowList(target, type) {
   openModal('followListModal');
 }
 
-async function compressAvatar(file) {
-  return new Promise(res => {
-    const r = new FileReader();
-    r.onload = e => {
-      const img = new Image();
-      img.onload = () => {
-        const c = document.createElement('canvas');
-        c.width = c.height = 80;
-        c.getContext('2d').drawImage(img, 0, 0, 80, 80);
-        res(c.toDataURL('image/webp', 0.7).split(',')[1]);
-      };
-      img.src = e.target.result;
-    };
-    r.readAsDataURL(file);
-  });
-}
-
 // ============================================================
 // NOTIFICATIONS
 // ============================================================
+// Fix #13: guard against re-binding markAllReadBtn on every visit
+let notifInitialized = false;
+
 async function initNotifications() {
   const me = App.me();
   const notifs = await db.get(`/notifications/${me}`);
-  const list = document.getElementById('notifList');
+  const list   = document.getElementById('notifList');
   if (!list) return;
 
   await loadUserCache();
 
   if (!notifs) {
     list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🔔</div><div class="empty-state-text">Nothing yet</div></div>';
+    App.notifCount = 0;
     return;
   }
 
   const arr = Object.entries(notifs)
     .map(([id, n]) => ({...n, id}))
-    .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   list.innerHTML = '';
   arr.forEach((n, i) => {
@@ -3685,8 +3819,8 @@ async function initNotifications() {
     el.className = 'notif-item' + (!n.read ? ' unread' : '');
     el.style.animationDelay = `${i * 40}ms`;
 
-    const icons = { like:'👍', love:'❤️', comment:'💬', follow:'👤', mention:'@' };
-    const icon = icons[n.type] || '🔔';
+    const icons   = { like:'👍', love:'❤️', comment:'💬', follow:'👤', mention:'@' };
+    const icon    = icons[n.type] || '🔔';
     const iconCls = n.type || '';
 
     const messages = {
@@ -3705,27 +3839,25 @@ async function initNotifications() {
       </div>
     `;
 
-    el.onclick = async () => {
+    el.addEventListener('click', async () => {
       await db.set(`/notifications/${me}/${n.id}/read`, true);
       el.classList.remove('unread');
       if (n.from) navigate('profile', { user: n.from });
-    };
+    });
 
     list.appendChild(el);
   });
 
-  // Mark all read button
+  // Fix #13: use onclick (replaces) instead of addEventListener (stacks)
   document.getElementById('markAllReadBtn').onclick = async () => {
-    const patches = {};
-    arr.forEach(n => { patches[`/notifications/${me}/${n.id}/read`] = true; });
-    for (const [path, val] of Object.entries(patches)) await db.set(path.slice(1), val);
+    for (const n of arr) {
+      if (!n.read) await db.set(`/notifications/${me}/${n.id}/read`, true);
+    }
     App.notifCount = 0;
-    arr.forEach(n => n.read = true);
     list.querySelectorAll('.notif-item').forEach(el => el.classList.remove('unread'));
     toast('All caught up!', 'success');
   };
 
-  // Update count
   App.notifCount = arr.filter(n => !n.read).length;
 }
 
@@ -3734,36 +3866,34 @@ async function initNotifications() {
 // ============================================================
 async function initExplore() {
   await loadUserCache();
-  const me = App.me();
-
+  const me    = App.me();
   const posts = await db.get('/posts');
+
   const users = Object.entries(usersCache)
     .filter(([u]) => u !== me)
     .map(([u, d]) => ({...d, username: u}));
 
   renderExploreUsers(users);
 
-  // Trending: most reactions in last 24h
   if (posts) {
     const cutoff = Date.now() - 86400000;
     const arr = Object.entries(posts)
-      .map(([id,p]) => ({...p,id}))
+      .map(([id, p]) => ({...p, id}))
       .filter(p => !p.deleted && new Date(p.createdAt).getTime() > cutoff)
       .map(p => ({
         ...p,
         score: Object.keys(p.likes||{}).length + Object.keys(p.loves||{}).length * 2 + Object.keys(p.comments||{}).length
       }))
-      .sort((a,b) => b.score - a.score)
+      .sort((a, b) => b.score - a.score)
       .slice(0, 10);
 
-    const el = document.getElementById('explorePosts');
-    if (el) {
-      el.innerHTML = '';
-      arr.forEach(p => el.appendChild(renderPost(p)));
+    const explorePostsEl = document.getElementById('explorePosts');
+    if (explorePostsEl) {
+      explorePostsEl.innerHTML = '';
+      arr.forEach(p => explorePostsEl.appendChild(renderPost(p)));
     }
   }
 
-  // Search
   document.getElementById('exploreSearch').oninput = e => {
     const q = e.target.value.trim().toLowerCase();
     if (!q) { renderExploreUsers(users); return; }
@@ -3777,7 +3907,6 @@ async function initExplore() {
 function renderExploreUsers(users) {
   const el = document.getElementById('exploreUsers');
   if (!el) return;
-  const me = App.me();
 
   if (!users.length) { el.innerHTML = '<div class="text-muted text-sm">No users found</div>'; return; }
 
@@ -3788,14 +3917,16 @@ function renderExploreUsers(users) {
     card.style.animationDelay = `${i * 40}ms`;
     const followers = Object.keys(u.followers||{}).length;
     card.innerHTML = `
-      <div class="post-avatar" style="width:42px;height:42px;">${avatarEl(u.username, u.avatar, 42)}</div>
+      <div class="post-avatar" style="width:42px;height:42px;">${avatarEl(u.username, u.avatarUrl || null, 42)}</div>
       <div class="user-card-info">
         <div class="user-card-name">${esc(u.displayName || u.username)} <span class="text-muted text-xs">@${esc(u.username)}</span></div>
         <div class="user-card-bio">${esc((u.bio||'No bio').slice(0,70))}</div>
         <div class="user-card-stats">${followers} follower${followers !== 1 ? 's' : ''}</div>
       </div>
-      <button class="btn btn-secondary btn-sm" onclick="navigate('profile',{user:'${esc(u.username)}'})">View</button>
+      <button class="btn btn-secondary btn-sm" data-nav-user="${esc(u.username)}">View</button>
     `;
+    // Fix #4
+    card.querySelector('[data-nav-user]').addEventListener('click', () => navigate('profile', { user: u.username }));
     el.appendChild(card);
   });
 }
@@ -3803,42 +3934,35 @@ function renderExploreUsers(users) {
 // ============================================================
 // SETTINGS
 // ============================================================
-let settingsInitialized = false;
+let settingsInitialized = false;  // Reset on logout (#9)
 
 function initSettings() {
-  // Always update toggle states (reflects current settings)
-  setToggle('toggleShowMuted',   App.settings.showMuted);
-  setToggle('toggleRelativeTime',App.settings.relativeTime);
-  setToggle('toggleCompact',     App.settings.compact);
-  setToggle('togglePublic',      App.settings.publicProfile);
-  setToggle('toggleDMs',         App.settings.allowDMs);
-  setToggle('notifLikes',        App.settings.notifLikes);
-  setToggle('notifComments',     App.settings.notifComments);
-  setToggle('notifFollows',      App.settings.notifFollows);
-  setToggle('notifMentions',     App.settings.notifMentions);
+  setToggle('toggleShowMuted',    App.settings.showMuted);
+  setToggle('toggleRelativeTime', App.settings.relativeTime);
+  setToggle('toggleCompact',      App.settings.compact);
+  setToggle('togglePublic',       App.settings.publicProfile);
+  setToggle('toggleDMs',          App.settings.allowDMs);
+  setToggle('notifLikes',         App.settings.notifLikes);
+  setToggle('notifComments',      App.settings.notifComments);
+  setToggle('notifFollows',       App.settings.notifFollows);
+  setToggle('notifMentions',      App.settings.notifMentions);
 
-  // Highlight current color
   document.querySelectorAll('.color-dot').forEach(d => {
     d.classList.toggle('selected', d.dataset.color === App.settings.accent);
   });
 
-  // Pre-fill
   const me = App.me();
   db.get(`/users/${me}`).then(user => {
     if (user) {
       document.getElementById('displayNameInput').value = user.displayName || me;
-      document.getElementById('bioInput').value = user.bio || '';
-      if (document.getElementById('avatarUrlInput')) {
-        document.getElementById('avatarUrlInput').value = user.avatarUrl || '';
-      }
+      document.getElementById('bioInput').value         = user.bio || '';
+      document.getElementById('avatarUrlInput').value   = user.avatarUrl || '';
     }
   });
 
-  // Bind event handlers only once
   if (settingsInitialized) return;
   settingsInitialized = true;
 
-  // Nav
   document.querySelectorAll('.settings-nav-item').forEach(btn => {
     btn.onclick = () => {
       document.querySelectorAll('.settings-nav-item').forEach(b => b.classList.remove('active'));
@@ -3848,7 +3972,6 @@ function initSettings() {
     };
   });
 
-  // Toggle handlers
   setupToggle('toggleShowMuted',    v => { App.settings.showMuted = v; App.saveSettings(); });
   setupToggle('toggleRelativeTime', v => { App.settings.relativeTime = v; App.saveSettings(); });
   setupToggle('toggleCompact',      v => {
@@ -3863,7 +3986,6 @@ function initSettings() {
   setupToggle('notifFollows',   v => { App.settings.notifFollows = v; App.saveSettings(); });
   setupToggle('notifMentions',  v => { App.settings.notifMentions = v; App.saveSettings(); });
 
-  // Color
   document.querySelectorAll('.color-dot').forEach(d => {
     d.onclick = () => {
       document.querySelectorAll('.color-dot').forEach(x => x.classList.remove('selected'));
@@ -3874,7 +3996,6 @@ function initSettings() {
     };
   });
 
-  // Save display name
   document.getElementById('saveDisplayName').onclick = async () => {
     const val = document.getElementById('displayNameInput').value.trim();
     if (!val) return;
@@ -3884,44 +4005,39 @@ function initSettings() {
     renderSidebar('sidebar-settings', 'settings');
   };
 
-  // Save bio
   document.getElementById('saveBio').onclick = async () => {
     const val = document.getElementById('bioInput').value.trim();
     await db.set(`/users/${me}/bio`, val);
     toast('Bio saved', 'success');
   };
 
-  // Avatar URL (replaces file upload — efficient, no base64 storage)
-  if (document.getElementById('saveAvatarUrl')) {
-    document.getElementById('saveAvatarUrl').onclick = async () => {
-      const url = document.getElementById('avatarUrlInput').value.trim();
-      await db.set(`/users/${me}/avatarUrl`, url);
-      // Also clear old base64 avatar to save DB space
-      await db.set(`/users/${me}/avatar`, '');
-      usersCache = {}; loadUserCache._lastFetch = 0; // bust cache
-      await loadUserCache(true);
-      renderSidebar('sidebar-settings', 'settings');
-      toast('Avatar updated', 'success');
-      await log('avatar_update');
-    };
-  }
+  document.getElementById('saveAvatarUrl').onclick = async () => {
+    const url = document.getElementById('avatarUrlInput').value.trim();
+    await db.set(`/users/${me}/avatarUrl`, url);
+    // Fix #5: no more base64 stored — clear old field entirely if it existed
+    await db.set(`/users/${me}/avatar`, null);
+    // Bust user cache so sidebar and posts pick up the new URL
+    usersCache = {}; loadUserCache._lastFetch = 0;
+    await loadUserCache(true);
+    renderSidebar('sidebar-settings', 'settings');
+    toast('Avatar updated', 'success');
+    await log('avatar_update');
+  };
 
-  // Change password
   document.getElementById('changePassBtn').onclick = async () => {
     const cur = document.getElementById('currentPass').value;
     const nw  = document.getElementById('newPass').value;
     if (!cur || !nw) { toast('Fill in both fields', 'error'); return; }
-    const user = await db.get(`/users/${me}`);
+    const user   = await db.get(`/users/${me}`);
     const curHash = await sha256(cur);
     if (user.passwordHash !== curHash) { toast('Current password incorrect', 'error'); return; }
     const newHash = await sha256(nw);
     await db.set(`/users/${me}/passwordHash`, newHash);
     document.getElementById('currentPass').value = '';
-    document.getElementById('newPass').value = '';
+    document.getElementById('newPass').value      = '';
     toast('Password updated', 'success');
   };
 
-  // Danger zone
   document.getElementById('deleteAllPostsBtn').onclick = async () => {
     if (!(await confirm2('Delete all posts', 'This will permanently delete all your posts.'))) return;
     const posts = await db.get('/posts');
@@ -3965,45 +4081,53 @@ function setupToggle(id, cb) {
 // ============================================================
 // ADMIN
 // ============================================================
+let adminInitialized = false;
+
 async function initAdmin() {
   if (!App.isAdmin) { toast('Access denied', 'error'); navigate('feed'); return; }
 
   loadAdminStats();
   loadAdminUsers();
 
-  document.querySelectorAll('.admin-tab-btn').forEach(btn => {
-    btn.onclick = () => {
-      document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.admin-tab-content').forEach(c => c.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById(btn.dataset.tab).classList.add('active');
-      if (btn.dataset.tab === 'a-users') loadAdminUsers();
-      if (btn.dataset.tab === 'a-posts') loadAdminPosts();
-      if (btn.dataset.tab === 'a-logs')  loadAdminLogs();
+  // Fix: bind tab/button handlers only once
+  if (!adminInitialized) {
+    adminInitialized = true;
+
+    document.querySelectorAll('.admin-tab-btn').forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.admin-tab-content').forEach(c => c.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(btn.dataset.tab).classList.add('active');
+        if (btn.dataset.tab === 'a-users') loadAdminUsers();
+        if (btn.dataset.tab === 'a-posts') loadAdminPosts();
+        if (btn.dataset.tab === 'a-logs')  loadAdminLogs();
+      };
+    });
+
+    document.getElementById('adminRefreshStats').onclick = loadAdminStats;
+    document.getElementById('adminRefreshUsers').onclick = loadAdminUsers;
+    document.getElementById('adminRefreshPosts').onclick = loadAdminPosts;
+    document.getElementById('adminRefreshLogs').onclick  = loadAdminLogs;
+    document.getElementById('adminClearLogs').onclick    = async () => {
+      if (!(await confirm2('Clear logs', 'Delete all activity logs?'))) return;
+      await db.del('/adminLogs');
+      toast('Logs cleared', 'success');
+      loadAdminLogs();
     };
-  });
-
-  document.getElementById('adminRefreshUsers').onclick = loadAdminUsers;
-  document.getElementById('adminRefreshPosts').onclick = loadAdminPosts;
-  document.getElementById('adminRefreshLogs').onclick  = loadAdminLogs;
-  document.getElementById('adminClearLogs').onclick    = async () => {
-    if (!(await confirm2('Clear logs', 'Delete all activity logs?'))) return;
-    await db.del('/adminLogs');
-    toast('Logs cleared', 'success');
-    loadAdminLogs();
-  };
-
-  document.getElementById('adminUserSearch').oninput = loadAdminUsers;
-  document.getElementById('adminPostSearch').oninput = loadAdminPosts;
+    document.getElementById('adminUserSearch').oninput = loadAdminUsers;
+    document.getElementById('adminPostSearch').oninput = loadAdminPosts;
+  }
 }
 
+// Fix #15: loadAdminStats is standalone so it can be called from the Refresh button
 async function loadAdminStats() {
   const [users, posts, dms] = await Promise.all([
     db.get('/users'), db.get('/posts'), db.get('/dms')
   ]);
 
-  const allUsers = users ? Object.entries(users) : [];
-  const allPosts = posts ? Object.entries(posts).filter(([,p]) => !p.deleted) : [];
+  const allUsers   = users ? Object.entries(users) : [];
+  const allPosts   = posts ? Object.entries(posts).filter(([,p]) => !p.deleted) : [];
   const mutedCount = allUsers.filter(([,u]) => Object.keys(u.muted||{}).length > 0).length;
 
   document.getElementById('stat-users').textContent = allUsers.length;
@@ -4013,54 +4137,57 @@ async function loadAdminStats() {
 }
 
 async function loadAdminUsers() {
-  const q = (document.getElementById('adminUserSearch')?.value || '').toLowerCase();
+  const q    = (document.getElementById('adminUserSearch')?.value || '').toLowerCase();
   const users = await db.get('/users');
-  const list = document.getElementById('adminUsersList');
+  const list  = document.getElementById('adminUsersList');
   if (!list || !users) return;
 
   const arr = Object.entries(users)
     .map(([u, d]) => ({...d, username: u}))
     .filter(u => !q || u.username.includes(q) || (u.displayName||'').toLowerCase().includes(q))
-    .sort((a,b) => new Date(b.createdAt||0) - new Date(a.createdAt||0));
+    .sort((a, b) => new Date(b.createdAt||0) - new Date(a.createdAt||0));
 
   list.innerHTML = '';
   arr.forEach((u, i) => {
     const el = document.createElement('div');
     el.className = 'admin-user-row stagger-item';
     el.style.animationDelay = `${i * 30}ms`;
-
     const hasMuted = Object.keys(u.muted||{}).length > 0;
-
     el.innerHTML = `
-      <div class="post-avatar" style="width:36px;height:36px;font-size:13px;">${avatarEl(u.username, u.avatar, 36)}</div>
+      <div class="post-avatar" style="width:36px;height:36px;font-size:13px;">${avatarEl(u.username, u.avatarUrl || null, 36)}</div>
       <div class="admin-user-info">
         <div class="admin-user-name">${esc(u.displayName || u.username)}
-          ${u.isAdmin ? `<span class="admin-user-badge badge-admin">ADMIN</span>` : ''}
-          ${hasMuted ? `<span class="admin-user-badge badge-muted">has mutes</span>` : ''}
+          ${u.isAdmin  ? `<span class="admin-user-badge badge-admin">ADMIN</span>` : ''}
+          ${hasMuted   ? `<span class="admin-user-badge badge-muted">has mutes</span>` : ''}
         </div>
         <div class="admin-user-meta">@${esc(u.username)} • Joined ${u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '?'}</div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button class="btn btn-ghost btn-xs" onclick="navigate('profile',{user:'${esc(u.username)}'})">View</button>
-        ${!u.isAdmin ? `<button class="btn btn-secondary btn-xs" onclick="adminPromote('${esc(u.username)}')">Promote</button>` : ''}
-        <button class="btn btn-danger btn-xs" onclick="adminDeleteUser('${esc(u.username)}')">Delete</button>
+        <button class="btn btn-ghost btn-xs" data-nav-user="${esc(u.username)}">View</button>
+        ${!u.isAdmin ? `<button class="btn btn-secondary btn-xs" data-promote="${esc(u.username)}">Promote</button>` : ''}
+        <button class="btn btn-danger btn-xs" data-delete-user="${esc(u.username)}">Delete</button>
       </div>
     `;
+    // Fix #4: data attributes + JS, no inline onclick with user data
+    el.querySelector('[data-nav-user]').addEventListener('click', () => navigate('profile', { user: u.username }));
+    const promoteBtn = el.querySelector('[data-promote]');
+    if (promoteBtn) promoteBtn.addEventListener('click', () => adminPromote(u.username));
+    el.querySelector('[data-delete-user]').addEventListener('click', () => adminDeleteUser(u.username));
     list.appendChild(el);
   });
 }
 
 async function loadAdminPosts() {
-  const q = (document.getElementById('adminPostSearch')?.value || '').toLowerCase();
+  const q    = (document.getElementById('adminPostSearch')?.value || '').toLowerCase();
   const posts = await db.get('/posts');
   await loadUserCache();
   const list = document.getElementById('adminPostsList');
   if (!list || !posts) return;
 
   const arr = Object.entries(posts)
-    .map(([id,p]) => ({...p,id}))
+    .map(([id, p]) => ({...p, id}))
     .filter(p => !p.deleted && (!q || (p.content||'').toLowerCase().includes(q) || (p.author||'').includes(q)))
-    .sort((a,b) => new Date(b.createdAt||0) - new Date(a.createdAt||0))
+    .sort((a, b) => new Date(b.createdAt||0) - new Date(a.createdAt||0))
     .slice(0, 50);
 
   list.innerHTML = '';
@@ -4075,10 +4202,13 @@ async function loadAdminPosts() {
       </div>
       <div style="font-size:13px;color:var(--text2);margin-bottom:10px;">${esc((p.content||'').slice(0,200))}</div>
       <div style="display:flex;gap:6px;">
-        <button class="btn btn-danger btn-xs" onclick="adminDeletePost('${esc(p.id)}')">Delete post</button>
-        <button class="btn btn-ghost btn-xs" onclick="App.muteUser('${esc(p.author)}')">Mute author</button>
+        <button class="btn btn-danger btn-xs" data-delete-post="${esc(p.id)}">Delete post</button>
+        <button class="btn btn-ghost btn-xs" data-mute-author="${esc(p.author)}">Mute author</button>
       </div>
     `;
+    // Fix #4
+    el.querySelector('[data-delete-post]').addEventListener('click', () => adminDeletePost(p.id));
+    el.querySelector('[data-mute-author]').addEventListener('click', () => App.muteUser(p.author));
     list.appendChild(el);
   });
 }
@@ -4091,7 +4221,7 @@ async function loadAdminLogs() {
   if (!logs) { list.innerHTML = '<div class="text-muted text-sm">No logs yet</div>'; return; }
 
   const arr = Object.values(logs)
-    .sort((a,b) => new Date(b.timestamp||0) - new Date(a.timestamp||0))
+    .sort((a, b) => new Date(b.timestamp||0) - new Date(a.timestamp||0))
     .slice(0, 100);
 
   list.innerHTML = arr.map(l => `
