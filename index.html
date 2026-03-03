@@ -3154,21 +3154,31 @@ async function loadConvoList() {
   if (!list) return;
 
   if (!dms) { list.innerHTML = '<div class="text-muted text-sm" style="padding:8px;">No conversations yet</div>'; return; }
-
-  const convos = Object.entries(dms)
-    .filter(([id]) => id.includes(me))
-    .map(([id, data]) => {
-      const msgs = data.messages ? Object.values(data.messages) : [];
-      const last = msgs.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
-      const [a, b2] = id.split('_');
-      const other = a === me ? b2 : a;
-      return { id, other, last, unread: last && last.sender !== me && !last.read };
-    })
-    .sort((a,b) => {
-      if (!a.last) return 1;
-      if (!b.last) return -1;
-      return new Date(b.last.createdAt) - new Date(a.last.createdAt);
-    });
+   
+   const convoMap = new Map();
+   Object.entries(dms)
+     .filter(([id]) => {
+       const parts = id.split('_');
+       return parts.length === 2 && (parts[0] === me || parts[1] === me);
+     })
+     .forEach(([id, data]) => {
+       const msgs = data.messages ? Object.values(data.messages) : [];
+       const last = msgs.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+       const [a, b2] = id.split('_');
+       const other = a === me ? b2 : a;
+       // If duplicate, keep the one with the more recent message
+       const existing = convoMap.get(other);
+       if (!existing || (last && (!existing.last || new Date(last.createdAt) > new Date(existing.last.createdAt)))) {
+         convoMap.set(other, { id, other, last, unread: last && last.sender !== me && !last.read });
+       }
+     });
+   
+   const convos = Array.from(convoMap.values())
+     .sort((a,b) => {
+       if (!a.last) return 1;
+       if (!b.last) return -1;
+       return new Date(b.last.createdAt) - new Date(a.last.createdAt);
+     });
 
   list.innerHTML = '';
   convos.forEach(c => {
