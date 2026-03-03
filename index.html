@@ -3100,10 +3100,79 @@ let dmMsgCount    = 0;
 
 function convoId(a, b) { return a < b ? `${a}_${b}` : `${b}_${a}`; }
 
+async function loadDmThread(other) {
+  const me = App.me();
+  const cid = convoId(me, other);
+  const data = await db.get(`/dms/${cid}/messages`);
+
+  const box = document.getElementById('dmMessages');
+  if (!box) return;
+
+  // Typing indicator
+  const typing = await db.get(`/dms/${cid}/typing/${other}`);
+  const ti = document.getElementById('typingIndicator');
+  if (ti) {
+    if (typing && (Date.now() - new Date(typing).getTime()) < 4000) {
+      ti.classList.remove('hidden');
+    } else {
+      ti.classList.add('hidden');
+    }
+  }
+
+  if (!data) {
+    box.innerHTML = '<div style="text-align:center;color:var(--text3);font-size:13px;padding:20px;">Start the conversation!</div>';
+    dmMsgCount = 0;
+    return;
+  }
+
+  // FIX: Mark messages as read
+  const unreadMsgs = Object.entries(data).filter(([id, msg]) => msg.sender !== me && !msg.read);
+  if (unreadMsgs.length > 0) {
+    // Update database in background
+    unreadMsgs.forEach(([id]) => db.set(`/dms/${cid}/messages/${id}/read`, true));
+    
+    // Update local count immediately for UI responsiveness
+    App.unreadDmCount = Math.max(0, App.unreadDmCount - unreadMsgs.length);
+    
+    // Update sidebar badge manually to avoid full re-render flicker
+    const dmNav = document.querySelector('.nav-item[onclick*="\'dm\'"]');
+    if (dmNav) {
+      let badge = dmNav.querySelector('.nav-badge');
+      if (App.unreadDmCount > 0) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'nav-badge';
+          dmNav.appendChild(badge);
+        }
+        badge.textContent = App.unreadDmCount > 9 ? '9+' : App.unreadDmCount;
+      } else if (badge) {
+        badge.remove();
+      }
+    }
+  }
+
+  const msgs = Object.values(data).sort((a,b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  // Only re-render if message count changed — no animation replay
+  if (msgs.length === dmMsgCount) return;
+  dmMsgCount = msgs.length;
+
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+
+  box.innerHTML = msgs.map(m => `
+    <div class="msg-bubble ${m.sender === me ? 'sent' : 'received'}">
+      ${esc(m.text)}
+      <div class="msg-time">${fmtTime(m.createdAt)}</div>
+    </div>
+  `).join('');
+
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+// Replace the existing initDMs function with this one
 function initDMs() {
   if (dmInterval) { clearInterval(dmInterval); dmInterval = null; }
 
-  // Bind listeners only once — re-binding stacks handlers
   if (!dmInitialized) {
     dmInitialized = true;
 
@@ -3131,13 +3200,17 @@ function initDMs() {
   }
 
   loadConvoList();
+  
+  // FIX: Added App.refreshDmCount() to the interval so the sidebar badge updates live
   dmInterval = setInterval(() => {
     loadConvoList();
     if (currentConvo) loadDmThread(currentConvo);
+    App.refreshDmCount(); 
   }, 4000);
+  
   pageIntervals['dm'] = dmInterval;
 }
-
+   
 async function startDmWith(username) {
   navigate('dm');
   setTimeout(() => openConvo(username), 100);
@@ -3199,49 +3272,6 @@ async function openConvo(other) {
   await loadDmThread(other);
   loadConvoList();
   document.getElementById('dmInput').focus();
-}
-
-async function loadDmThread(other) {
-  const me = App.me();
-  const cid = convoId(me, other);
-  const data = await db.get(`/dms/${cid}/messages`);
-
-  const box = document.getElementById('dmMessages');
-  if (!box) return;
-
-  // Typing indicator
-  const typing = await db.get(`/dms/${cid}/typing/${other}`);
-  const ti = document.getElementById('typingIndicator');
-  if (ti) {
-    if (typing && (Date.now() - new Date(typing).getTime()) < 4000) {
-      ti.classList.remove('hidden');
-    } else {
-      ti.classList.add('hidden');
-    }
-  }
-
-  if (!data) {
-    box.innerHTML = '<div style="text-align:center;color:var(--text3);font-size:13px;padding:20px;">Start the conversation!</div>';
-    dmMsgCount = 0;
-    return;
-  }
-
-  const msgs = Object.values(data).sort((a,b) => new Date(a.createdAt) - new Date(b.createdAt));
-
-  // Only re-render if message count changed — no animation replay
-  if (msgs.length === dmMsgCount) return;
-  dmMsgCount = msgs.length;
-
-  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-
-  box.innerHTML = msgs.map(m => `
-    <div class="msg-bubble ${m.sender === me ? 'sent' : 'received'}">
-      ${esc(m.text)}
-      <div class="msg-time">${fmtTime(m.createdAt)}</div>
-    </div>
-  `).join('');
-
-  if (atBottom) box.scrollTop = box.scrollHeight;
 }
 
 async function sendDm() {
