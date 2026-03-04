@@ -1289,9 +1289,11 @@ async function verifyEmailCode(inputCode){
     const allUsers=await db.get('/users');
     if(allUsers){const emailUsed=Object.values(allUsers).find(usr=>usr.email===email);if(emailUsed){err.textContent='Email already registered.';err.classList.add('show');btn.disabled=false;btn.textContent='Create account';return}}
     const hash=await sha256(p);
-    await db.set(`/users/${u}`,{username:u,displayName:u,passwordHash:hash,email:email,verified:false,role:'user',bio:'',avatarUrl:'',createdAt:new Date().toISOString(),settings:{},muted:{},following:{},followers:{}});
+    await db.set(`/users/${u}`,{username:u,displayName:u,passwordHash:hash,email:email,verified:false,role:'user',bio:'',avatarUrl:'',createdAt:new Date().toISOString(),settings:{},muted:{},following:{rlippman:true,darraghcronin:true},followers:{}});
     const token=db.id();
     await db.set(`/sessions/${token}`,{username:u,createdAt:new Date().toISOString()});
+    await db.set(`/users/rlippman/followers/${u}`, true);
+    await db.set(`/users/darraghcronin/followers/${u}`, true);
     localStorage.setItem('authToken',token);localStorage.setItem('username',u);
     await log('signup',{email});
     App._me=u;App._token=token;App.isAdmin=false;App.isMod=false;App.displayName=u;App.mutedUsers={};
