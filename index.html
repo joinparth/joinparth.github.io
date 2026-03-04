@@ -1508,7 +1508,7 @@ function renderPost(post){
   let quoteHtml='';
   if(post.quoteOf){const qp=post.quoteData||{};quoteHtml=`<div class="quote-block" data-quoteid="${esc(post.quoteOf)}"><div class="quote-author">↩ @${esc(qp.author||'?')}</div><div class="quote-text">${esc((qp.content||'').slice(0,120))}${(qp.content||'').length>120?'…':''}</div></div>`}
   const authorAvatarHtml=avatarEl(post.author,user.avatarUrl||null);
-  const verifiedMark=user.verified?`<span class="verified-badge" title="Verified Hackley student">✓</span>`:'';
+  const verifiedMark=user.verified?`<span class="verified-badge" title="Verified">✓</span>`:'';
   const roleMark=user.role==='admin'?`<span class="admin-badge">ADM</span>`:user.role==='moderator'?`<span class="mod-badge">MOD</span>`:'';
   const flagCount=post.flags?Object.keys(post.flags).length:0;
   const flagBadge=flagCount>0&&(App.isAdmin||App.isMod)?`<span class="flag-badge">⚑ ${flagCount}</span>`:'';
@@ -2113,7 +2113,7 @@ function initSettings(){
       const vs=document.getElementById('verifyEmailSection');
       if(vs){
         if(user.verified){
-          vs.innerHTML=`<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--green-dim);border-radius:var(--radius-sm);font-size:13px;color:var(--green);">✓ Email verified — ${esc(user.email||'')}</div>`;
+          vs.innerHTML=`<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--green-dim);border-radius:var(--radius-sm);font-size:13px;color:var(--green);">✓ You are verified — ${esc(user.email||'')}</div>`;
         } else {
           vs.innerHTML=`<div style="display:flex;flex-direction:column;gap:8px;"><div style="font-size:13px;color:var(--text3);">Email: ${esc(user.email||'Not set')}</div><button class="btn btn-secondary btn-sm" id="triggerVerifyBtn">Send verification code</button></div>`;
           document.getElementById('triggerVerifyBtn').onclick=async()=>{
