@@ -2058,7 +2058,7 @@ async function initNotifications(){
 // ============================================================
 async function initExplore(){
   await loadUserCache();const me=App.me();const posts=await db.get('/posts');
-  const users=Object.entries(usersCache).filter(([u])=>u!==me).map(([u,d])=>({...d,username:u}));
+  const users=Object.entries(usersCache).filter(([u,d])=>u!==me&&!d.banned).map(([u,d])=>({...d,username:u}));
   renderExploreUsers(users);
   if(posts){
     const cutoff=Date.now()-86400000;
