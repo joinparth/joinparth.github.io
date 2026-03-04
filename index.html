@@ -100,7 +100,7 @@ img{max-width:100%;display:block}
 .char-count{font-size:12px;color:var(--text3)}
 .char-count.warn{color:var(--accent)}.char-count.over{color:var(--red)}
 /* POSTS */
-.post-item{border-bottom:1px solid var(--border);padding:16px 0;animation:postIn 0.3s ease both;position:relative}
+.post-item{border-bottom:1px solid var(--border);padding:16px 0;position:relative}
 @keyframes postIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 .post-item.muted-post{opacity:0.35}
 .post-item.muted-post.show-muted{opacity:0.55}
@@ -590,6 +590,14 @@ body.compact .content-wrap{padding:16px 16px 60px}
                 <div style="font-size:11px;color:var(--text3);margin-top:6px;">Paste any direct image URL — shown as your avatar everywhere.</div>
               </div>
               <div class="settings-group">
+                <label class="settings-label">Profile banner URL</label>
+                <div style="display:flex;gap:8px;align-items:center;">
+                  <input class="input" id="bannerUrlInput" placeholder="https://example.com/banner.jpg" style="flex:1;">
+                  <button class="btn btn-secondary btn-sm" id="saveBannerUrl">Set</button>
+                </div>
+                <div style="font-size:11px;color:var(--text3);margin-top:6px;">Paste any direct image URL — shown as your profile banner.</div>
+              </div>
+              <div class="settings-group">
                 <div class="settings-label">Email verification</div>
                 <div id="verifyEmailSection"></div>
               </div>
@@ -947,6 +955,18 @@ const NAV=[
 
 function renderSidebar(containerId,activePage){
   const el=document.getElementById(containerId);if(!el)return;
+  // Smart update: if already rendered for this page, just update badges
+  if(el.dataset.renderedPage===activePage&&el.querySelector('[data-nav]')){
+    const unreadNotif=App.notifCount||0;const unreadDms=App.unreadDmCount||0;
+    el.querySelectorAll('[data-nav]').forEach(item=>{
+      const id=item.dataset.nav;
+      item.querySelectorAll('.nav-badge').forEach(b=>b.remove());
+      if(id==='notifications'&&unreadNotif>0){const b=document.createElement('span');b.className='nav-badge';b.textContent=unreadNotif>9?'9+':unreadNotif;item.appendChild(b);}
+      else if(id==='dm'&&unreadDms>0){const b=document.createElement('span');b.className='nav-badge';b.textContent=unreadDms>9?'9+':unreadDms;item.appendChild(b);}
+    });
+    return;
+  }
+  el.dataset.renderedPage=activePage;
   const me=App.me();
   let html=`<div class="sidebar-logo">parth<span>.</span>social</div>`;
   const unreadNotif=App.notifCount||0;
@@ -1437,13 +1457,16 @@ async function loadFeed(firstLoad=false){
     return true;
   });
 
-  // Render pinned posts
+  // Render pinned posts - only re-render if set changed to avoid animation replay
   if(pinnedContainer){
-    pinnedContainer.innerHTML='';
-    pinned.forEach(post=>{
-      const el=renderPost(post);
-      pinnedContainer.appendChild(el);
-    });
+    const newPinnedIds=pinned.map(p=>p.id).join(',');
+    if(pinnedContainer.dataset.pinnedIds!==newPinnedIds){
+      pinnedContainer.innerHTML='';
+      pinned.forEach(post=>{pinnedContainer.appendChild(renderPost(post));});
+      pinnedContainer.dataset.pinnedIds=newPinnedIds;
+    } else {
+      pinned.forEach(p=>updatePostCounts(p));
+    }
   }
 
   if(firstLoad){
@@ -1778,7 +1801,10 @@ async function loadDmThread(other){
   const ti=document.getElementById('typingIndicator');
   if(ti){if(typing&&(Date.now()-new Date(typing).getTime())<4000)ti.classList.remove('hidden');else ti.classList.add('hidden')}
   if(!data){box.innerHTML='<div style="text-align:center;color:var(--text3);font-size:13px;padding:20px;">Start the conversation!</div>';dmMsgCount=0;return}
-  const msgs=Object.values(data).sort((a,b)=>new Date(a.createdAt)-new Date(b.createdAt));
+  const msgs=Object.entries(data).map(([k,v])=>({...v,_key:k})).sort((a,b)=>new Date(a.createdAt)-new Date(b.createdAt));
+  // Mark unread received messages as read
+  const cid2=convoId(me,other);
+  msgs.forEach(m=>{if(m.sender!==me&&!m.read)db.set(`/dms/${cid2}/messages/${m._key}/read`,true);});
   if(msgs.length===dmMsgCount)return;
   dmMsgCount=msgs.length;
   const atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<80;
@@ -1917,6 +1943,9 @@ async function initProfile(viewUser){
   const target=viewUser||App.me();const me=App.me();
   const user=await db.get(`/users/${target}`);
   if(!user){toast('User not found','error');navigate('feed');return}
+  // Render profile banner
+  const bannerEl=document.querySelector('.profile-banner');
+  if(bannerEl){if(user.bannerUrl){bannerEl.style.backgroundImage=`url('${esc(user.bannerUrl)}')`;bannerEl.style.backgroundSize='cover';bannerEl.style.backgroundPosition='center';bannerEl.style.backgroundRepeat='no-repeat';}else{bannerEl.style.backgroundImage='';bannerEl.style.backgroundSize='';bannerEl.style.backgroundPosition='';}}
   const profileAvEl=document.getElementById('profileAvatarEl');profileAvEl.innerHTML='';
   if(user.avatarUrl)profileAvEl.innerHTML=`<img src="${esc(user.avatarUrl)}" alt="${esc(target)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.style.display='none'">`;
   else profileAvEl.textContent=(target[0]||'?').toUpperCase();
@@ -2077,6 +2106,7 @@ function initSettings(){
       document.getElementById('displayNameInput').value=user.displayName||me;
       document.getElementById('bioInput').value=user.bio||'';
       document.getElementById('avatarUrlInput').value=user.avatarUrl||'';
+      document.getElementById('bannerUrlInput').value=user.bannerUrl||'';
       // Verify section
       const vs=document.getElementById('verifyEmailSection');
       if(vs){
@@ -2116,6 +2146,7 @@ function initSettings(){
   document.getElementById('saveDisplayName').onclick=async()=>{const val=document.getElementById('displayNameInput').value.trim();if(!val)return;await db.set(`/users/${me}/displayName`,val);App.displayName=val;toast('Display name updated','success');renderSidebar('sidebar-settings','settings')};
   document.getElementById('saveBio').onclick=async()=>{const val=document.getElementById('bioInput').value.trim();await db.set(`/users/${me}/bio`,val);toast('Bio saved','success')};
   document.getElementById('saveAvatarUrl').onclick=async()=>{const url=document.getElementById('avatarUrlInput').value.trim();await db.set(`/users/${me}/avatarUrl`,url);await db.set(`/users/${me}/avatar`,null);usersCache={};loadUserCache._lastFetch=0;await loadUserCache(true);renderSidebar('sidebar-settings','settings');toast('Avatar updated','success');await log('avatar_update')};
+  document.getElementById('saveBannerUrl').onclick=async()=>{const url=document.getElementById('bannerUrlInput').value.trim();await db.set(`/users/${me}/bannerUrl`,url);toast('Banner updated','success');await log('banner_update')};
   document.getElementById('changePassBtn').onclick=async()=>{
     const cur=document.getElementById('currentPass').value;const nw=document.getElementById('newPass').value;
     if(!cur||!nw){toast('Fill in both fields','error');return}
