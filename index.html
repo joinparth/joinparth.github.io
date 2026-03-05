@@ -1269,20 +1269,52 @@ function createEmojiPicker(onSelect){
   return picker;
 }
 
-function showEmojiPicker(anchorEl,onSelect){
-  document.querySelectorAll('.emoji-picker').forEach(p=>p.remove());
-  const picker=createEmojiPicker(onSelect);
-  picker.style.position='fixed';
+function showEmojiPicker(anchorEl, onSelect) {
+  document.querySelectorAll('.emoji-picker').forEach(p => p.remove());
+  const picker = createEmojiPicker(onSelect);
+  picker.style.position = 'fixed';
   document.body.appendChild(picker);
-  const rect=anchorEl.getBoundingClientRect();
-  const pw=280,ph=200;
-  let top=rect.bottom+4;
-  let left=rect.left;
-  if(left+pw>window.innerWidth)left=window.innerWidth-pw-8;
-  if(top+ph>window.innerHeight)top=rect.top-ph-4;
-  if(left<8)left=8;
-  picker.style.top=`${top}px`;picker.style.left=`${left}px`;
-  setTimeout(()=>{document.addEventListener('click',function h(e){if(!picker.contains(e.target)){picker.remove();document.removeEventListener('click',h)}},{passive:true})},50);
+  
+  // Calculate position
+  const rect = anchorEl.getBoundingClientRect();
+  const pw = 280, ph = 280; // Use a safe estimate for picker height
+  const margin = 8;
+  
+  let top = rect.bottom + 4;
+  let left = rect.left;
+
+  // 1. Fix Horizontal Overflow (Right side)
+  if (left + pw > window.innerWidth - margin) {
+    left = window.innerWidth - pw - margin;
+  }
+  // 2. Fix Horizontal Underflow (Left side)
+  if (left < margin) {
+    left = margin;
+  }
+  
+  // 3. Fix Vertical Overflow (Bottom side)
+  // Check if the picker would go below the viewport
+  if (top + ph > window.innerHeight - margin) {
+    // Flip it: show above the anchor instead of below
+    top = rect.top - ph - 4;
+  }
+  
+  // 4. Final safety check for top (if flipped and still too high, force to top edge)
+  if (top < margin) {
+    top = margin;
+  }
+
+  picker.style.top = `${top}px`;
+  picker.style.left = `${left}px`;
+  
+  setTimeout(() => {
+    document.addEventListener('click', function h(e) {
+      if (!picker.contains(e.target)) {
+        picker.remove();
+        document.removeEventListener('click', h);
+      }
+    }, { passive: true });
+  }, 50);
 }
 
 // ============================================================
