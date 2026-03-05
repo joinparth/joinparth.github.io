@@ -473,6 +473,9 @@ body.compact .content-wrap{padding:16px 16px 60px}
   
   /* Bottom nav on mobile */
   .bottom-nav{display:block}
+  /* DM/Group input bars sit above bottom nav when nav is visible */
+  .dm-input-bar{padding-bottom:calc(60px + 12px + var(--safe-bottom))}
+  .group-input-bar{padding-bottom:calc(60px + 12px + var(--safe-bottom))}
   
   /* Main content padding for bottom nav */
   .main .content-wrap{padding-top:72px;padding-bottom:calc(80px + var(--safe-bottom))}
@@ -529,8 +532,13 @@ body.compact .content-wrap{padding:16px 16px 60px}
   #toast-container{left:16px;right:16px;bottom:calc(80px + var(--safe-bottom))}
   .toast{max-width:none}
   
-  /* Hamburger hidden when bottom nav is visible */
+  /* Hamburger hidden when bottom nav is visible (small mobile) */
+  @media (max-width:533px){
   .hamburger{display:none}
+  }
+  @media (min-width:534px) and (max-width:768px){
+  .hamburger{display:flex}
+  }
   
   /* Msg bubble width on mobile */
   .msg-bubble{max-width:88%}
@@ -541,6 +549,7 @@ body.compact .content-wrap{padding:16px 16px 60px}
 </style>
 </head>
 <body>
+<button type="button" class="hamburger" id="hamburgerBtn" aria-label="Open menu">☰</button>
 
 <!-- AUTH PAGE -->
 <div id="page-auth" class="page">
@@ -625,7 +634,14 @@ body.compact .content-wrap{padding:16px 16px 60px}
     <main class="main" id="stackyMain">
       <div class="content-wrap">
         <div class="page-header">🤖 Stacky</div>
-        <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">Conversations with @stacky, Stacky's posts, and replies. No regular feed posts here.</p>
+        <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">Chat with @stacky — your posts here mention them and appear in this feed.</p>
+        <div class="compose-box" id="stackyComposeBox">
+          <textarea id="stackyPostText" placeholder="Message @stacky..." maxlength="1000" rows="2"></textarea>
+          <div class="compose-footer">
+            <span class="char-count" id="stackyCharCount">0 / 1000</span>
+            <button class="btn btn-primary btn-sm" id="stackyPostBtn">Send to Stacky</button>
+          </div>
+        </div>
         <div id="stackyPosts"></div>
       </div>
     </main>
@@ -1357,6 +1373,7 @@ function navigate(page,params={}){
   if(currentPage&&pageIntervals[currentPage]){clearInterval(pageIntervals[currentPage]);delete pageIntervals[currentPage]}
   if(currentPage==='admin'&&typeof activeUserInterval!=='undefined'&&activeUserInterval){clearInterval(activeUserInterval);activeUserInterval=null}
   if(currentPage==='admin')stopSocialMap();
+  if(currentPage==='feed')feedInitialized=false;
   feedInterval=null;dmInterval=null;groupInterval=null;
   PAGES.forEach(p=>{const el=document.getElementById(`page-${p}`);if(el)el.classList.remove('active')});
   const el=document.getElementById(`page-${page}`);
@@ -1395,6 +1412,7 @@ const BOTTOM_NAV_ITEMS=[
   {id:'feed',icon:'🏠',label:'Feed'},
   {id:'dm',icon:'💬',label:'DMs'},
   {id:'groups',icon:'👥',label:'Groups'},
+  {id:'stacky',icon:'🤖',label:'Stacky',stackyOnly:true},
   {id:'notifications',icon:'🔔',label:'Alerts'},
   {id:'explore',icon:'🔍',label:'Explore'},
   {id:'profile',icon:'👤',label:'Me'},
@@ -1405,7 +1423,11 @@ const BOTTOM_NAV_ITEMS=[
 function renderBottomNav(activePage){
   const inner=document.getElementById('bottomNavInner');if(!inner)return;
   inner.innerHTML='';
-  const items=BOTTOM_NAV_ITEMS.filter(item=>!(item.adminOnly&&!App.isAdmin&&!App.isMod));
+  const items=BOTTOM_NAV_ITEMS.filter(item=>{
+    if(item.adminOnly&&!App.isAdmin&&!App.isMod)return false;
+    if(item.stackyOnly&&App.settings.showStackyFeed===false)return false;
+    return true;
+  });
   items.forEach(item=>{
     const el=document.createElement('div');
     el.className='bottom-nav-item'+(item.id===activePage||
@@ -1690,8 +1712,9 @@ async function pushNotif(to,type,data={}){
   if(type==='comment'&&!s.notifComments)return;
   if(type==='follow'&&!s.notifFollows)return;
   if(type==='mention'&&!s.notifMentions)return;
-  // Don't notify blocked users
   if(App.isBlocked(to))return;
+  const from=data.from;
+  if(from){const toSettings=await db.get(`/users/${to}/settings`);if(toSettings&&toSettings.blockedUsers&&toSettings.blockedUsers[from])return;}
   await db.push(`/notifications/${to}`,{type,...data,read:false,createdAt:new Date().toISOString()});
 }
 
@@ -1738,10 +1761,16 @@ async function sendVerificationEmail(username,email){
 
   loginForm.onsubmit=async e=>{
     e.preventDefault();
-    const u=document.getElementById('loginUsername').value.trim().toLowerCase();
-    const p=document.getElementById('loginPassword').value;
     const err=document.getElementById('loginError');
     err.classList.remove('show');
+    const lockout=localStorage.getItem('loginLockoutUntil');
+    if(lockout&&Date.now()<parseInt(lockout,10)){
+      const mins=Math.ceil((parseInt(lockout,10)-Date.now())/60000);
+      err.textContent=`Too many attempts. Try again in ${mins} minute${mins!==1?'s':''}.`;
+      err.classList.add('show');return;
+    }
+    const u=document.getElementById('loginUsername').value.trim().toLowerCase();
+    const p=document.getElementById('loginPassword').value;
     if(!u||!p){err.textContent='Fill in all fields.';err.classList.add('show');return}
     const btn=document.getElementById('loginSubmit');
     btn.disabled=true;btn.textContent='Signing in…';
@@ -1749,8 +1778,13 @@ async function sendVerificationEmail(username,email){
     const hash=await sha256(p);
     const user=await db.get(`/users/${u}`);
     if(!user||user.passwordHash!==hash){
-      err.textContent='Invalid username or password.';err.classList.add('show');return;
+      const attempts=(parseInt(localStorage.getItem('loginAttempts')||'0',10)+1);
+      localStorage.setItem('loginAttempts',String(attempts));
+      if(attempts>=5){localStorage.setItem('loginLockoutUntil',String(Date.now()+15*60*1000));err.textContent='Too many failed attempts. Try again in 15 minutes.';}
+      else err.textContent='Invalid username or password.';
+      err.classList.add('show');return;
     }
+    localStorage.removeItem('loginAttempts');localStorage.removeItem('loginLockoutUntil');
     if(user.banned){
       const now=Date.now();
       if(!user.banExpiry||user.banExpiry>now){showBannedScreen(user.banReason||'Your account has been suspended.');return}
@@ -1797,6 +1831,7 @@ async function sendVerificationEmail(username,email){
     if(existing){err.textContent='Username already taken.';err.classList.add('show');btn.disabled=false;btn.textContent='Create account';return}
     await loadUserCache(true);
     const emailUsed=Object.values(usersCache).find(usr=>usr.email===email);
+    if(emailUsed){err.textContent='Email already registered.';err.classList.add('show');btn.disabled=false;btn.textContent='Create account';return}
     const hash=await sha256(p);
     // Hold data client-side until verified
     pendingUserData={username:u,email,hash};
@@ -1888,7 +1923,6 @@ async function loadUsersByIds(ids){
     const u=await db.get(`users/${uid}`);
     if(u){delete u.passwordHash;usersCache[uid]=u;}
   }));
-  loadUserCache._lastFetch=Date.now();
 }
 async function loadUserCache(force=false){
   if(!force&&loadUserCache._lastFetch&&Date.now()-loadUserCache._lastFetch<LOAD_USER_CACHE_TTL_MS&&Object.keys(usersCache).length)return;
@@ -1932,6 +1966,8 @@ let renderedPostIds=new Set();
 let loadFeedInProgress=false;
 let pollOptions=[];
 let pendingImageUrl='';
+const DUPLICATE_POST_WINDOW_MS=120000;
+let lastPostByMe={content:'',time:0};
 
 function initFeed(){
   if(feedInterval){clearInterval(feedInterval);feedInterval=null}
@@ -1969,9 +2005,37 @@ let stackyRenderedIds=new Set();
 let stackyFeedInterval=null;
 function initStacky(){
   if(stackyFeedInterval){clearInterval(stackyFeedInterval);stackyFeedInterval=null}
+  const txt=document.getElementById('stackyPostText');
+  const cnt=document.getElementById('stackyCharCount');
+  if(txt&&cnt){
+    txt.oninput=()=>{const n=txt.value.length;cnt.textContent=`${n} / 1000`;cnt.className='char-count'+(n>950?' over':n>800?' warn':'')};
+    document.getElementById('stackyPostBtn').onclick=submitStackyPost;
+  }
   loadStackyFeed(true);
   stackyFeedInterval=setInterval(()=>loadStackyFeed(false),15000);
   pageIntervals['stacky']=stackyFeedInterval;
+}
+
+async function submitStackyPost(){
+  const txt=document.getElementById('stackyPostText');
+  if(!txt)return;
+  let content=txt.value.trim();
+  if(!content){toast('Write something to send to Stacky','error');return}
+  if(!content.toLowerCase().includes('@stacky'))content='@stacky '+content;
+  const me=App.me();
+  const config=await db.get('/config');
+  if(config&&config.freezeFeed&&!App.isAdmin){toast('Feed is frozen','error');return}
+  const user=await db.get(`/users/${me}`);
+  if(user&&user.timeout&&user.timeout>Date.now()){toast('You are timed out','error');return}
+  if(!isPostAllowed(content)){toast('Contains blocked content','error');return}
+  if(content===lastPostByMe.content&&Date.now()-lastPostByMe.time<DUPLICATE_POST_WINDOW_MS){toast('Identical post blocked. Wait a moment.','error');return}
+  const postId=db.id();
+  await db.set(`/posts/${postId}`,{id:postId,author:me,content,likes:{},loves:{},comments:{},createdAt:new Date().toISOString(),deleted:false,pinned:false,anonymous:!!App.settings.anonymous});
+  txt.value='';document.getElementById('stackyCharCount').textContent='0 / 1000';
+  lastPostByMe={content:content,time:Date.now()};
+  toast('Sent to Stacky!','success');
+  if(navigator.vibrate)navigator.vibrate(5);
+  loadStackyFeed(false);
 }
 
 async function loadStackyFeed(firstLoad=false){
@@ -2174,10 +2238,11 @@ function renderPost(post){
   let pollHtml='';
   if(post.poll&&post.poll.options){
     const totalVotes=Object.values(post.poll.votes||{}).length;
-    const myVote=post.poll.votes&&post.poll.votes[me];
-    const voted=post.poll.votes&&post.poll.votes.hasOwnProperty(me);
+    const votes=post.poll.votes||{};
+    const myVote=votes[me];
+    const voted=Object.prototype.hasOwnProperty.call(votes,me);
     pollHtml=`<div class="poll-container">${post.poll.options.map((opt,idx)=>{
-      const count=post.poll.votes?Object.values(post.poll.votes).filter(v=>v===idx).length:0;
+      const count=Object.values(post.poll.votes||{}).filter(v=>v===idx).length;
       const pct=totalVotes?Math.round(count/totalVotes*100):0;
       const isMyVote=myVote===idx;
       return`<div class="poll-option${voted?' voted':''}" data-vote-idx="${idx}" data-postid="${esc(post.id)}"><div class="poll-bar" style="width:${voted?pct:0}%"></div><div class="poll-option-content"><span>${esc(opt)}${isMyVote?' ✓':''}</span>${voted?`<span class="poll-option-pct">${pct}%</span>`:''}</div></div>`;
@@ -2419,10 +2484,10 @@ async function loadComments(postId){
     const roleMark=u.role==='admin'?`<span class="admin-badge">ADM</span>`:u.role==='moderator'?`<span class="mod-badge">MOD</span>`:'';
     return`<div class="comment-item"><div class="comment-avatar">${avatarEl(c.author,u.avatarUrl||null)}</div><div class="comment-body"><div class="comment-author">${esc(u.displayName||c.author)}${verifiedMark}${roleMark}</div><div class="comment-text">${esc(c.text)}</div><div class="comment-time">${fmtTime(c.createdAt)}</div></div></div>`;
   }).join('');
-  html+=`<div class="comment-input-row"><input class="input" id="cinput-${esc(postId)}" placeholder="Add a comment…" maxlength="500" style="flex:1"><button class="btn btn-primary btn-sm" data-comment-postid="${esc(postId)}">Post</button></div>`;
+  html+=`<div class="comment-input-row"><input class="input" placeholder="Add a comment…" maxlength="500" style="flex:1"><button class="btn btn-primary btn-sm" data-comment-postid="${esc(postId)}">Post</button></div>`;
   sec.innerHTML=html;
   sec.querySelector(`[data-comment-postid]`).addEventListener('click',()=>submitComment(postId));
-  sec.querySelector(`#cinput-${postId}`).addEventListener('keydown',e=>{if(e.key==='Enter')submitComment(postId)});
+  sec.querySelector('.comment-input-row input').addEventListener('keydown',e=>{if(e.key==='Enter')submitComment(postId)});
 }
 
 async function submitComment(postId){
@@ -2430,7 +2495,8 @@ async function submitComment(postId){
   const user=await db.get(`/users/${me}`);
   if(user&&user.timeout&&user.timeout>Date.now()){toast('You are currently timed out','error');return}
   const config=await db.get('/config');if(config&&config.freezeFeed&&!App.isAdmin){toast('Feed is frozen','error');return}
-  const inp=document.getElementById(`cinput-${postId}`);if(!inp)return;
+  const sec=document.getElementById(`comments-${postId}`);if(!sec)return;
+  const inp=sec.querySelector('.comment-input-row input');if(!inp)return;
   const text=inp.value.trim();if(!text)return;
   if(!isPostAllowed(text)){toast('Comment contains blocked content','error');return}
   const cid=db.id();
@@ -2453,6 +2519,7 @@ async function submitPost(){
   const txt=document.getElementById('postText');
   const content=txt.value.trim();
   if(!content&&!pendingImageUrl){toast('Write something first','error');return}
+  if(content&&content===lastPostByMe.content&&Date.now()-lastPostByMe.time<DUPLICATE_POST_WINDOW_MS){toast('Identical post blocked. Wait a moment before posting again.','error');return}
   const fullContent=content;
   if(!isPostAllowed(fullContent)){toast('Post contains blocked content','error');return}
   if(fullContent.length>platformConfig.maxPostLength){toast(`Post too long (max ${platformConfig.maxPostLength} chars)`,'error');return}
@@ -2473,6 +2540,7 @@ async function submitPost(){
   pollOptions=[];document.getElementById('pollBuilder').style.display='none';
   pendingImageUrl='';document.getElementById('imagePreviewArea').style.display='none';
   btn.disabled=false;
+  lastPostByMe={content:fullContent,time:Date.now()};
   if(navigator.vibrate)navigator.vibrate([8,5,8]);
   await loadFeed(true);toast('Posted!','success');
 }
@@ -2765,7 +2833,7 @@ function initGroups(){
     document.getElementById('groupEmojiBtn').onclick=function(){showEmojiPicker(this,emoji=>{const inp=document.getElementById('groupInput');inp.value+=emoji;inp.focus()})};
   }
   loadGroupsList();
-  groupInterval=setInterval(()=>{loadGroupsList();if(currentGroup)loadGroupMessages(currentGroup,false)},5000);
+  groupInterval=setInterval(async()=>{loadGroupsList();if(currentGroup)loadGroupMessages(currentGroup,false);await App.refreshDmCount();await App.refreshNotifCount();renderSidebar('sidebar-groups','groups');renderBottomNav('groups')},5000);
   pageIntervals['groups']=groupInterval;
 }
 
@@ -3642,6 +3710,7 @@ function setupDmSearch(){
 async function adminSearchDms(){
   const q=(document.getElementById('adminDmSearchInput').value||'').trim().toLowerCase();
   if(!q){toast('Enter a search term','error');return}
+  await log('admin_dm_search',{query:q});
   const dms=await db.get('/dms');const results=document.getElementById('adminDmResults');
   results.innerHTML='<div class="spinner"></div>';
   if(!dms){results.innerHTML='<div class="text-muted text-sm">No DMs found</div>';return}
@@ -3735,7 +3804,7 @@ async function renderSocialMap(){
 function setupSwipeBack(element,onSwipeBack){
   let startX=0,startY=0;
   element.addEventListener('touchstart',e=>{startX=e.touches[0].clientX;startY=e.touches[0].clientY},{passive:true});
-  element.addEventListener('touchend',e=>{const dx=e.changedTouches[0].clientX-startX;const dy=Math.abs(e.changedTouches[0].clientY-startY);if(dx>60&&dy<40)onSwipeBack()},{passive:true});
+  element.addEventListener('touchend',e=>{const dx=e.changedTouches[0].clientX-startX;const dy=Math.abs(e.changedTouches[0].clientY-startY);if(dx>100&&dy<30)onSwipeBack()},{passive:true});
 }
 
 document.addEventListener('DOMContentLoaded',()=>{
