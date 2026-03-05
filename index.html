@@ -1614,10 +1614,16 @@ function avatarEl(username,avatarUrl){
 }
 async function log(action,meta={}){await db.push('/adminLogs',{action,user:App.me(),...meta,timestamp:new Date().toISOString()})}
 
-// Render post body with hashtags, mentions, and image embeds
 function renderPostBody(content){
   if(!content)return'';
-  const lines=content.split('\n');
+  // Decode any HTML entities that may have been stored
+  function decodeEntities(str){
+    const txt=document.createElement('textarea');
+    txt.innerHTML=str;
+    return txt.value;
+  }
+  const decoded=decodeEntities(content);
+  const lines=decoded.split('\n');
   const processedLines=lines.map(line=>{
     return esc(line)
       .replace(/#(\w+)/g,'<a class="hashtag" data-hashtag="$1">#$1</a>')
@@ -1626,7 +1632,7 @@ function renderPostBody(content){
   const bodyHtml=processedLines.join('<br>');
   // Extract image URLs for embeds
   const imgRegex=/https?:\/\/\S+\.(jpg|jpeg|png|gif|webp)(\?\S*)?/gi;
-  const imgs=[...content.matchAll(imgRegex)];
+  const imgs=[...decoded.matchAll(imgRegex)];
   let embedHtml='';
   if(imgs.length){
     const uniqueUrls=[...new Set(imgs.map(m=>m[0]))].slice(0,3);
@@ -1634,7 +1640,6 @@ function renderPostBody(content){
   }
   return`<div class="post-body">${bodyHtml}</div>${embedHtml}`;
 }
-
 // ============================================================
 // FOLLOW SYSTEM
 // ============================================================
