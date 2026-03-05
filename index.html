@@ -1604,7 +1604,7 @@ function showMaintenanceScreen(){
 // ============================================================
 // UTILS
 // ============================================================
-function esc(s){if(s==null)return'';return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function esc(s){if(s==null)return'';return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function timeAgo(ts){const diff=Date.now()-new Date(ts).getTime();const s=Math.floor(diff/1000);if(s<60)return`${s}s`;const m=Math.floor(s/60);if(m<60)return`${m}m`;const h=Math.floor(m/60);if(h<24)return`${h}h`;const d=Math.floor(h/24);if(d<7)return`${d}d`;return new Date(ts).toLocaleDateString()}
 function fmtTime(ts){if(!ts)return'';if(App.settings.relativeTime)return timeAgo(ts);return new Date(ts).toLocaleString()}
 function avatarEl(username,avatarUrl){
@@ -2840,7 +2840,12 @@ async function initProfile(viewUser){
   if(target===me){
     const ov=document.createElement('div');ov.className='avatar-upload-overlay';ov.id='avatarUploadOverlay';ov.textContent='📷';profileAvEl.appendChild(ov);
     document.getElementById('avatarUploadOverlay').onclick=()=>toast('Use the avatar URL field in Settings to update your avatar','info');
-    document.getElementById('avatarFileInput').onchange=async e=>{toast('Use Settings > Avatar URL instead of upload','info');e.target.value=''};
+    document.getElementById('avatarFileInput').onchange=async e=>{
+      e.preventDefault();
+      toast('Use Settings > Avatar URL instead of upload','info');
+      e.target.value='';
+      return false;
+    };
   }
   const trustedBadge=user.trusted?`<span class="trusted-badge" style="font-size:18px;" title="Trusted User">★</span>`:'';
   const verifiedBadge=!user.trusted&&user.verified?`<span class="verified-badge" style="font-size:18px;" title="Verified">✓</span>`:'';
