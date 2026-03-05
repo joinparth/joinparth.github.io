@@ -29,15 +29,22 @@ echo -e "${RESET}"
 # ── Dependency checks ─────────────────────────────────────────
 info "Checking dependencies…"
 
+silent_install() {
+  # $1 = package manager command + args (as array), $2 = friendly name
+  info "Installing dependencies…"
+  if ! "$@" &>/dev/null; then
+    error "Could not install $2. Please install it manually."
+  fi
+}
+
 need_cmd() {
   if ! command -v "$1" &>/dev/null; then
-    warn "'$1' not found — attempting to install…"
     if command -v apt-get &>/dev/null; then
-      sudo apt-get install -y "$2" || error "Could not install $2. Please install it manually."
+      silent_install sudo apt-get install -y "$2" "$2"
     elif command -v dnf &>/dev/null; then
-      sudo dnf install -y "$2" || error "Could not install $2. Please install it manually."
+      silent_install sudo dnf install -y "$2" "$2"
     elif command -v pacman &>/dev/null; then
-      sudo pacman -S --noconfirm "$2" || error "Could not install $2. Please install it manually."
+      silent_install sudo pacman -S --noconfirm "$2" "$2"
     else
       error "'$1' is required but not installed, and no known package manager found."
     fi
@@ -60,13 +67,13 @@ detect_browser() {
 BROWSER=$(detect_browser)
 
 if [[ -z "$BROWSER" ]]; then
-  info "No Chromium-based browser found — installing Chromium…"
+  info "Installing dependencies…"
   if command -v apt-get &>/dev/null; then
-    sudo apt-get install -y chromium || sudo apt-get install -y chromium-browser || error "Could not install Chromium."
+    sudo apt-get install -y chromium &>/dev/null || sudo apt-get install -y chromium-browser &>/dev/null || error "Could not install Chromium."
   elif command -v dnf &>/dev/null; then
-    sudo dnf install -y chromium || error "Could not install Chromium."
+    sudo dnf install -y chromium &>/dev/null || error "Could not install Chromium."
   elif command -v pacman &>/dev/null; then
-    sudo pacman -S --noconfirm chromium || error "Could not install Chromium."
+    sudo pacman -S --noconfirm chromium &>/dev/null || error "Could not install Chromium."
   else
     error "Could not install Chromium — no known package manager found. Please install Chrome/Chromium manually."
   fi
