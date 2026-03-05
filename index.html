@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Parth.Social</title>
+<title>parth.social</title>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
 <script>(function(){ emailjs.init("gWgHwkPBzHaIeiuRW"); })();</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
@@ -1207,10 +1207,11 @@ async function sha256(msg){
 class FirebaseAPI{
   constructor(url){this.base=url.endsWith('/')?url:url+'/';this.heads={'Content-Type':'application/json'}}
   async req(path,opts={}){
-    try{const r=await fetch(`${this.base}${path}.json`,opts);if(!r.ok)return null;return r.json()}
+    const qs=opts.params?'?'+new URLSearchParams(opts.params).toString():'';
+    try{const r=await fetch(`${this.base}${path}.json${qs}`,opts);if(!r.ok)return null;return r.json()}
     catch(e){handleOffline();return null}
   }
-  get(p){return this.req(p)}
+  get(p,opts={}){return this.req(p,opts)}
   set(p,d){return this.req(p,{method:'PUT',headers:this.heads,body:JSON.stringify(d)})}
   async push(p,d){const r=await this.req(p,{method:'POST',headers:this.heads,body:JSON.stringify(d)});return r}
   patch(p,d){return this.req(p,{method:'PATCH',headers:this.heads,body:JSON.stringify(d)})}
@@ -1355,6 +1356,7 @@ let feedInterval=null,dmInterval=null,groupInterval=null;
 function navigate(page,params={}){
   if(currentPage&&pageIntervals[currentPage]){clearInterval(pageIntervals[currentPage]);delete pageIntervals[currentPage]}
   if(currentPage==='admin'&&typeof activeUserInterval!=='undefined'&&activeUserInterval){clearInterval(activeUserInterval);activeUserInterval=null}
+  if(currentPage==='admin')stopSocialMap();
   feedInterval=null;dmInterval=null;groupInterval=null;
   PAGES.forEach(p=>{const el=document.getElementById(`page-${p}`);if(el)el.classList.remove('active')});
   const el=document.getElementById(`page-${page}`);
@@ -1793,8 +1795,8 @@ async function sendVerificationEmail(username,email){
     btn.disabled=true;btn.textContent='Checking…';
     const existing=await db.get(`/users/${u}`);
     if(existing){err.textContent='Username already taken.';err.classList.add('show');btn.disabled=false;btn.textContent='Create account';return}
-    const allUsers=await db.get('/users');
-    if(allUsers){const emailUsed=Object.values(allUsers).find(usr=>usr.email===email);if(emailUsed){err.textContent='Email already registered.';err.classList.add('show');btn.disabled=false;btn.textContent='Create account';return}}
+    await loadUserCache(true);
+    const emailUsed=Object.values(usersCache).find(usr=>usr.email===email);
     const hash=await sha256(p);
     // Hold data client-side until verified
     pendingUserData={username:u,email,hash};
@@ -1874,13 +1876,26 @@ function showVerifyModal(){
 }
 
 // ============================================================
-// USER CACHE
+// USER CACHE (fetch by ID to avoid loading password hashes for all users)
 // ============================================================
 let usersCache={};
+const LOAD_USER_CACHE_TTL_MS=60000;
+async function loadUsersByIds(ids){
+  if(!ids||!ids.length)return;
+  const unique=Array.from(new Set(ids));
+  await Promise.all(unique.map(async uid=>{
+    if(usersCache[uid])return;
+    const u=await db.get(`users/${uid}`);
+    if(u){delete u.passwordHash;usersCache[uid]=u;}
+  }));
+  loadUserCache._lastFetch=Date.now();
+}
 async function loadUserCache(force=false){
-  if(!force&&loadUserCache._lastFetch&&Date.now()-loadUserCache._lastFetch<60000&&Object.keys(usersCache).length)return;
-  const users=await db.get('/users');
-  if(users){for(const u of Object.keys(users))delete users[u].passwordHash;usersCache=users;loadUserCache._lastFetch=Date.now()}
+  if(!force&&loadUserCache._lastFetch&&Date.now()-loadUserCache._lastFetch<LOAD_USER_CACHE_TTL_MS&&Object.keys(usersCache).length)return;
+  const keys=await db.get('users',{params:{shallow:'true'}});
+  if(!keys||typeof keys!=='object'){loadUserCache._lastFetch=0;return}
+  const ids=Object.keys(keys);
+  await loadUsersByIds(ids);
 }
 loadUserCache._lastFetch=0;
 
@@ -1888,8 +1903,11 @@ loadUserCache._lastFetch=0;
 // CONFIG
 // ============================================================
 let platformConfig={maxPostLength:1000,wordFilter:[],maintenanceMode:false,freezeFeed:false};
-async function loadConfig(){
+const LOAD_CONFIG_THROTTLE_MS=60000;
+async function loadConfig(force=false){
+  if(!force&&loadConfig._lastFetch&&Date.now()-loadConfig._lastFetch<LOAD_CONFIG_THROTTLE_MS)return;
   const c=await db.get('/config');if(c)Object.assign(platformConfig,c);
+  loadConfig._lastFetch=Date.now();
 }
 
 function isPostAllowed(text){
@@ -2053,7 +2071,8 @@ async function checkTimeoutBanner(){
 }
 
 async function checkComposeBanner(){
-  const config=await db.get('/config');
+  await loadConfig(true);
+  const config=platformConfig;
   if(config&&config.freezeFeed){
     const compose=document.getElementById('composeBox');
     if(compose&&!App.isAdmin){compose.style.display='none';}
@@ -2078,18 +2097,22 @@ async function loadFeed(firstLoad=false){
   if(loadFeedInProgress)return;
   loadFeedInProgress=true;
   try{
-  await loadUserCache();await loadConfig();
+  await loadConfig();
   const me=App.me();
   const posts=await db.get('/posts');
+  if(!posts){
+    const container=document.getElementById('feedPosts');
+    const pinnedContainer=document.getElementById('feedPinnedPosts');
+    if(container){container.innerHTML='<div class="empty-state"><div class="empty-state-icon">✍️</div><div class="empty-state-text">No posts yet — be the first!</div></div>';renderedPostIds.clear();if(pinnedContainer)pinnedContainer.innerHTML='';}
+    loadFeedInProgress=false;return;
+  }
+  const arr=Object.entries(posts).map(([id,p])=>({...p,id})).filter(p=>!p.deleted);
+  const authorIds=[...new Set(arr.map(p=>p.author).filter(Boolean))];
+  await loadUsersByIds(authorIds);
   const container=document.getElementById('feedPosts');
   const pinnedContainer=document.getElementById('feedPinnedPosts');
   if(!container)return;
-  if(!posts){
-    container.innerHTML='<div class="empty-state"><div class="empty-state-icon">✍️</div><div class="empty-state-text">No posts yet — be the first!</div></div>';
-    renderedPostIds.clear();if(pinnedContainer)pinnedContainer.innerHTML='';return;
-  }
-  const arr=Object.entries(posts).map(([id,p])=>({...p,id}))
-    .filter(p=>!p.deleted)
+  const filteredArr=arr
     .filter(p=>{
       const u=usersCache[p.author]||{};
       if(u.globalMuted&&p.author!==me)return false;
@@ -2100,8 +2123,8 @@ async function loadFeed(firstLoad=false){
       return true;
     })
     .sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
-  const pinned=arr.filter(p=>p.pinned);
-  const regular=arr.filter(p=>!p.pinned);
+  const pinned=filteredArr.filter(p=>p.pinned);
+  const regular=filteredArr.filter(p=>!p.pinned);
   if(pinnedContainer){
     const newPinnedIds=pinned.map(p=>p.id).join(',');
     if(pinnedContainer.dataset.pinnedIds!==newPinnedIds){
@@ -3429,8 +3452,8 @@ async function initAdmin(){
     };
     document.getElementById('sendBroadcastBtn').onclick=async()=>{
       const text=document.getElementById('broadcastText').value.trim();if(!text)return;
-      const users=await db.get('/users');
-      if(users)for(const uid of Object.keys(users)){await db.push(`/notifications/${uid}`,{type:'system',text,read:false,createdAt:new Date().toISOString()})}
+      await loadUserCache(true);
+      for(const uid of Object.keys(usersCache)){await db.push(`/notifications/${uid}`,{type:'system',text,read:false,createdAt:new Date().toISOString()})}
       await db.set('/broadcast',{id:db.id(),text,active:true,createdAt:new Date().toISOString(),by:App.me()});
       closeModal('broadcastModal');document.getElementById('broadcastText').value='';
       toast('Broadcast sent','success');
@@ -3455,7 +3478,9 @@ async function updateActiveUsers(){
 }
 
 async function loadAdminStats(){
-  const [users,posts,dms]=await Promise.all([db.get('/users'),db.get('/posts'),db.get('/dms')]);
+  await loadUserCache(true);
+  const [posts,dms]=await Promise.all([db.get('/posts'),db.get('/dms')]);
+  const users=usersCache;
   const allUsers=users?Object.entries(users):[];
   const allPosts=posts?Object.entries(posts).filter(([,p])=>!p.deleted):[];
   const flagged=posts?Object.entries(posts).filter(([,p])=>!p.deleted&&p.flags&&Object.keys(p.flags).length>0):[];
@@ -3470,7 +3495,8 @@ async function loadAdminStats(){
 
 async function loadAdminUsers(){
   const q=(document.getElementById('adminUserSearch')?.value||'').toLowerCase();
-  const users=await db.get('/users');const list=document.getElementById('adminUsersList');if(!list||!users)return;
+  await loadUserCache(true);
+  const users=usersCache;const list=document.getElementById('adminUsersList');if(!list||!users||!Object.keys(users).length)return;
   const arr=Object.entries(users).map(([u,d])=>({...d,username:u})).filter(u=>!q||u.username.includes(q)||(u.displayName||'').toLowerCase().includes(q)).sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0));
   list.innerHTML='';
   arr.forEach((u,i)=>{
@@ -3631,7 +3657,8 @@ async function adminSearchDms(){
 }
 
 async function renderAdminConfig(){
-  await loadConfig();const panel=document.getElementById('adminConfigPanel');if(!panel)return;
+  await loadConfig(true);
+  const panel=document.getElementById('adminConfigPanel');if(!panel)return;
   const wf=(platformConfig.wordFilter||[]);
   panel.innerHTML=`<div style="display:flex;flex-direction:column;gap:20px;">
     <div class="card" style="padding:16px;">
@@ -3668,14 +3695,20 @@ async function loadAdminLogs(){
 // ============================================================
 // SOCIAL MAP
 // ============================================================
-let mapZoomBehavior=null;let mapSvgSelection=null;
+let mapZoomBehavior=null;let mapSvgSelection=null;let socialMapSimulation=null;
 function mapZoom(factor){if(mapZoomBehavior&&mapSvgSelection)mapSvgSelection.transition().call(mapZoomBehavior.scaleBy,factor)}
+function stopSocialMap(){
+  if(socialMapSimulation){socialMapSimulation.stop();socialMapSimulation=null}
+  mapZoomBehavior=null;mapSvgSelection=null;
+}
 
 async function renderSocialMap(){
   const svg=document.getElementById('social-map-svg');if(!svg)return;
   svg.innerHTML='<text x="50%" y="50%" text-anchor="middle" fill="var(--text3)" font-size="13">Loading...</text>';
-  const [users,groups,dms]=await Promise.all([db.get('/users'),db.get('/groups'),db.get('/dms')]);
-  if(!users){svg.innerHTML='<text x="50%" y="50%" text-anchor="middle" fill="var(--text3)" font-size="13">No data</text>';return}
+  await loadUserCache(true);
+  const [groups,dms]=await Promise.all([db.get('/groups'),db.get('/dms')]);
+  const users=usersCache;
+  if(!users||!Object.keys(users).length){svg.innerHTML='<text x="50%" y="50%" text-anchor="middle" fill="var(--text3)" font-size="13">No data</text>';return}
   const nodes=Object.keys(users).map(u=>({id:u,displayName:users[u].displayName||u,role:users[u].role||'user'}));
   const links=[];
   Object.entries(users).forEach(([u,data])=>{Object.keys(data.following||{}).forEach(f=>{if(users[f])links.push({source:u,target:f,type:'follow'})})});
@@ -3688,6 +3721,7 @@ async function renderSocialMap(){
   mapZoomBehavior=zoom;mapSvgSelection=s;s.call(zoom);
   const g=s.append('g');
   const sim=d3.forceSimulation(nodes).force('link',d3.forceLink(links).id(d=>d.id).distance(80)).force('charge',d3.forceManyBody().strength(-200)).force('center',d3.forceCenter(W/2,H/2)).force('boundary',()=>{nodes.forEach(d=>{d.x=Math.max(20,Math.min(W-20,d.x));d.y=Math.max(20,Math.min(H-20,d.y))})});
+  socialMapSimulation=sim;
   const link=g.append('g').selectAll('line').data(links).enter().append('line').attr('stroke',d=>colorMap[d.type]||'#888').attr('stroke-opacity',0.5).attr('stroke-width',1.5);
   const node=g.append('g').selectAll('circle').data(nodes).enter().append('circle').attr('r',d=>d.role==='admin'?10:d.role==='moderator'?8:6).attr('fill',d=>d.role==='admin'?'var(--red)':d.role==='moderator'?'var(--purple)':'var(--accent)').attr('stroke','var(--bg)').attr('stroke-width',1.5).style('cursor','pointer').call(d3.drag().on('start',(event,d)=>{if(!event.active)sim.alphaTarget(0.3).restart();d.fx=d.x;d.fy=d.y}).on('drag',(event,d)=>{d.fx=Math.max(0,Math.min(W,event.x));d.fy=Math.max(0,Math.min(H,event.y))}).on('end',(event,d)=>{if(!event.active)sim.alphaTarget(0);d.fx=null;d.fy=null}));
   const label=g.append('g').selectAll('text').data(nodes).enter().append('text').text(d=>d.displayName.slice(0,12)).attr('font-size',9).attr('fill','var(--text2)').attr('text-anchor','middle').attr('dy','1.5em');
