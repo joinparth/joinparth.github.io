@@ -2054,12 +2054,12 @@ async function loadFeed(firstLoad=false){
     });
   }
 }
+
+
 function renderPost(post){
   const me=App.me();
-  // Decode HTML entities stored in DB
   function decode(s){if(!s)return'';const t=document.createElement('textarea');t.innerHTML=s;return t.value}
   const isAnon=!!(post.anonymous&&post.author!==me&&!(App.isAdmin||App.isMod));
-  const displayAuthor=isAnon?'anonymous':post.author;
   const user=isAnon?{}:(usersCache[post.author]||{});
   const isMuted=!!App.mutedUsers[post.author]&&post.author!==me;
   const showMuted=App.settings.showMuted;
@@ -2076,7 +2076,7 @@ function renderPost(post){
   if(post.quoteOf){
     const qp=post.quoteData||{};
     const qpDecoded=decode(qp.content||'');
-    quoteHtml=`<div class="quote-block" data-quoteid="${esc(post.quoteOf)}"><div class="quote-author">↩ @${esc(qp.author||'?')}</div><div class="quote-text">${esc(qpDecoded.slice(0,120))}${qpDecoded.length>120?'…':''}</div></div>`
+    quoteHtml=`<div class="quote-block" data-quoteid="${esc(post.quoteOf)}"><div class="quote-author">↩ @${esc(qp.author||'?')}</div><div class="quote-text">${esc(qpDecoded.slice(0,120))}${qpDecoded.length>120?'…':''}</div></div>`;
   }
   let pollHtml='';
   if(post.poll&&post.poll.options){
@@ -2125,7 +2125,6 @@ function renderPost(post){
     ${post.reactions?renderPostReactions(post):''}
     <div class="comments-section" id="comments-${esc(post.id)}"></div>`;
 
-  // Poll voting
   wrap.querySelectorAll('.poll-option[data-vote-idx]').forEach(opt=>{
     opt.addEventListener('click',async()=>{
       if(opt.classList.contains('voted'))return;
@@ -2135,40 +2134,6 @@ function renderPost(post){
       await loadFeed(false);
     });
   });
-
-  wrap.addEventListener('click',e=>{
-    if(e.target.closest('.poll-option'))return;
-    const profileEl=e.target.closest('[data-profile]');
-    if(profileEl&&profileEl.dataset.profile&&!e.target.closest('[data-action]')&&!e.target.closest('.post-menu-btn')&&!e.target.closest('.hashtag')&&!e.target.closest('.mention')){navigate('profile',{user:profileEl.dataset.profile});return}
-    const hashtagEl=e.target.closest('.hashtag');
-    if(hashtagEl){showHashtagModal(hashtagEl.dataset.hashtag);return}
-    const mentionEl=e.target.closest('.mention');
-    if(mentionEl){navigate('profile',{user:mentionEl.dataset.mention});return}
-    const quoteBlock=e.target.closest('.quote-block[data-quoteid]');
-    if(quoteBlock){scrollToPost(quoteBlock.dataset.quoteid);return}
-    const btn=e.target.closest('[data-action]');
-    if(btn){handlePostAction(btn.dataset.action,btn.dataset.postid,btn.dataset.postcontent,btn.dataset.postauthor,btn,post);return}
-    const menuBtn=e.target.closest('.post-menu-btn');
-    if(menuBtn)showPostMenu(menuBtn,post,user);
-  });
-  return wrap;
-}  wrap.addEventListener('click',e=>{
-    if(e.target.closest('.poll-option'))return; // handled above
-    const profileEl=e.target.closest('[data-profile]');
-    if(profileEl&&profileEl.dataset.profile&&!e.target.closest('[data-action]')&&!e.target.closest('.post-menu-btn')&&!e.target.closest('.hashtag')&&!e.target.closest('.mention')){navigate('profile',{user:profileEl.dataset.profile});return}
-    const hashtagEl=e.target.closest('.hashtag');
-    if(hashtagEl){showHashtagModal(hashtagEl.dataset.hashtag);return}
-    const mentionEl=e.target.closest('.mention');
-    if(mentionEl){navigate('profile',{user:mentionEl.dataset.mention});return}
-    const quoteBlock=e.target.closest('.quote-block[data-quoteid]');
-    if(quoteBlock){scrollToPost(quoteBlock.dataset.quoteid);return}
-    const btn=e.target.closest('[data-action]');
-    if(btn){handlePostAction(btn.dataset.action,btn.dataset.postid,btn.dataset.postcontent,btn.dataset.postauthor,btn,post);return}
-    const menuBtn=e.target.closest('.post-menu-btn');
-    if(menuBtn)showPostMenu(menuBtn,post,user);
-  });
-  return wrap;
-}
 
 function renderPostReactions(post){
   if(!post.reactions)return'';
