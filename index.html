@@ -1614,16 +1614,10 @@ function avatarEl(username,avatarUrl){
 }
 async function log(action,meta={}){await db.push('/adminLogs',{action,user:App.me(),...meta,timestamp:new Date().toISOString()})}
 
+// Render post body with hashtags, mentions, and image embeds
 function renderPostBody(content){
   if(!content)return'';
-  // Decode any HTML entities that may have been stored
-  function decodeEntities(str){
-    const txt=document.createElement('textarea');
-    txt.innerHTML=str;
-    return txt.value;
-  }
-  const decoded=decodeEntities(content);
-  const lines=decoded.split('\n');
+  const lines=content.split('\n');
   const processedLines=lines.map(line=>{
     return esc(line)
       .replace(/#(\w+)/g,'<a class="hashtag" data-hashtag="$1">#$1</a>')
@@ -1632,7 +1626,7 @@ function renderPostBody(content){
   const bodyHtml=processedLines.join('<br>');
   // Extract image URLs for embeds
   const imgRegex=/https?:\/\/\S+\.(jpg|jpeg|png|gif|webp)(\?\S*)?/gi;
-  const imgs=[...decoded.matchAll(imgRegex)];
+  const imgs=[...content.matchAll(imgRegex)];
   let embedHtml='';
   if(imgs.length){
     const uniqueUrls=[...new Set(imgs.map(m=>m[0]))].slice(0,3);
@@ -1640,6 +1634,7 @@ function renderPostBody(content){
   }
   return`<div class="post-body">${bodyHtml}</div>${embedHtml}`;
 }
+
 // ============================================================
 // FOLLOW SYSTEM
 // ============================================================
@@ -2055,11 +2050,10 @@ async function loadFeed(firstLoad=false){
   }
 }
 
-
 function renderPost(post){
   const me=App.me();
-  function decode(s){if(!s)return'';const t=document.createElement('textarea');t.innerHTML=s;return t.value}
   const isAnon=!!(post.anonymous&&post.author!==me&&!(App.isAdmin||App.isMod));
+  const displayAuthor=isAnon?'anonymous':post.author;
   const user=isAnon?{}:(usersCache[post.author]||{});
   const isMuted=!!App.mutedUsers[post.author]&&post.author!==me;
   const showMuted=App.settings.showMuted;
@@ -2073,11 +2067,7 @@ function renderPost(post){
   const liked=post.likes&&post.likes[me];
   const loved=post.loves&&post.loves[me];
   let quoteHtml='';
-  if(post.quoteOf){
-    const qp=post.quoteData||{};
-    const qpDecoded=decode(qp.content||'');
-    quoteHtml=`<div class="quote-block" data-quoteid="${esc(post.quoteOf)}"><div class="quote-author">↩ @${esc(qp.author||'?')}</div><div class="quote-text">${esc(qpDecoded.slice(0,120))}${qpDecoded.length>120?'…':''}</div></div>`;
-  }
+  if(post.quoteOf){const qp=post.quoteData||{};quoteHtml=`<div class="quote-block" data-quoteid="${esc(post.quoteOf)}"><div class="quote-author">↩ @${esc(qp.author||'?')}</div><div class="quote-text">${esc((qp.content||'').slice(0,120))}${(qp.content||'').length>120?'…':''}</div></div>`}
   let pollHtml='';
   if(post.poll&&post.poll.options){
     const totalVotes=Object.values(post.poll.votes||{}).length;
@@ -2087,7 +2077,7 @@ function renderPost(post){
       const count=post.poll.votes?Object.values(post.poll.votes).filter(v=>v===idx).length:0;
       const pct=totalVotes?Math.round(count/totalVotes*100):0;
       const isMyVote=myVote===idx;
-      return`<div class="poll-option${voted?' voted':''}" data-vote-idx="${idx}" data-postid="${esc(post.id)}"><div class="poll-bar" style="width:${voted?pct:0}%"></div><div class="poll-option-content"><span>${esc(decode(opt))}${isMyVote?' ✓':''}</span>${voted?`<span class="poll-option-pct">${pct}%</span>`:''}</div></div>`;
+      return`<div class="poll-option${voted?' voted':''}" data-vote-idx="${idx}" data-postid="${esc(post.id)}"><div class="poll-bar" style="width:${voted?pct:0}%"></div><div class="poll-option-content"><span>${esc(opt)}${isMyVote?' ✓':''}</span>${voted?`<span class="poll-option-pct">${pct}%</span>`:''}</div></div>`;
     }).join('')}<div class="poll-meta">${totalVotes} vote${totalVotes!==1?'s':''}</div></div>`;
   }
   const authorAvatarHtml=isAnon?'?':avatarEl(post.author,user.avatarUrl||null);
@@ -2125,6 +2115,7 @@ function renderPost(post){
     ${post.reactions?renderPostReactions(post):''}
     <div class="comments-section" id="comments-${esc(post.id)}"></div>`;
 
+  // Poll voting
   wrap.querySelectorAll('.poll-option[data-vote-idx]').forEach(opt=>{
     opt.addEventListener('click',async()=>{
       if(opt.classList.contains('voted'))return;
@@ -2134,6 +2125,24 @@ function renderPost(post){
       await loadFeed(false);
     });
   });
+
+  wrap.addEventListener('click',e=>{
+    if(e.target.closest('.poll-option'))return; // handled above
+    const profileEl=e.target.closest('[data-profile]');
+    if(profileEl&&profileEl.dataset.profile&&!e.target.closest('[data-action]')&&!e.target.closest('.post-menu-btn')&&!e.target.closest('.hashtag')&&!e.target.closest('.mention')){navigate('profile',{user:profileEl.dataset.profile});return}
+    const hashtagEl=e.target.closest('.hashtag');
+    if(hashtagEl){showHashtagModal(hashtagEl.dataset.hashtag);return}
+    const mentionEl=e.target.closest('.mention');
+    if(mentionEl){navigate('profile',{user:mentionEl.dataset.mention});return}
+    const quoteBlock=e.target.closest('.quote-block[data-quoteid]');
+    if(quoteBlock){scrollToPost(quoteBlock.dataset.quoteid);return}
+    const btn=e.target.closest('[data-action]');
+    if(btn){handlePostAction(btn.dataset.action,btn.dataset.postid,btn.dataset.postcontent,btn.dataset.postauthor,btn,post);return}
+    const menuBtn=e.target.closest('.post-menu-btn');
+    if(menuBtn)showPostMenu(menuBtn,post,user);
+  });
+  return wrap;
+}
 
 function renderPostReactions(post){
   if(!post.reactions)return'';
