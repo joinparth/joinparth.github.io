@@ -1613,28 +1613,62 @@ function avatarEl(username,avatarUrl){
   return initial;
 }
 async function log(action,meta={}){await db.push('/adminLogs',{action,user:App.me(),...meta,timestamp:new Date().toISOString()})}
-
-// Render post body with hashtags, mentions, and image embeds
-function renderPostBody(content){
-  if(!content)return'';
-  const lines=content.split('\n');
-  const processedLines=lines.map(line=>{
-    return esc(line)
-      .replace(/#(\w+)/g,'<a class="hashtag" data-hashtag="$1">#$1</a>')
-      .replace(/@(\w+)/g,'<a class="mention" data-mention="$1">@$1</a>');
-  });
-  const bodyHtml=processedLines.join('<br>');
-  // Extract image URLs for embeds
-  const imgRegex=/https?:\/\/\S+\.(jpg|jpeg|png|gif|webp)(\?\S*)?/gi;
-  const imgs=[...content.matchAll(imgRegex)];
+function renderPostBody(content, imageUrl){
+  if(!content&&!imageUrl)return'';
+  let bodyHtml='';
+  if(content){
+    const lines=content.split('\n');
+    const processedLines=lines.map(line=>{
+      return esc(line)
+        .replace(/#(\w+)/g,'<a class="hashtag" data-hashtag="$1">#$1</a>')
+        .replace(/@(\w+)/g,'<a class="mention" data-mention="$1">@$1</a>');
+    });
+    bodyHtml=processedLines.join('<br>');
+  }
   let embedHtml='';
-  if(imgs.length){
-    const uniqueUrls=[...new Set(imgs.map(m=>m[0]))].slice(0,3);
-    embedHtml=uniqueUrls.map(url=>`<div class="post-image-embed"><img src="${esc(url)}" loading="lazy" alt="Image" onerror="this.parentNode.remove()"></div>`).join('');
+  if(imageUrl){
+    embedHtml=`<div class="post-image-embed"><img src="${esc(imageUrl)}" loading="lazy" alt="Image" onerror="this.parentNode.remove()"></div>`;
   }
   return`<div class="post-body">${bodyHtml}</div>${embedHtml}`;
 }
 
+  function renderPostBody(content, imageUrl){
+  if(!content&&!imageUrl)return'';
+  let bodyHtml='';
+  if(content){
+    const lines=content.split('\n');
+    const processedLines=lines.map(line=>{
+      return esc(line)
+        .replace(/#(\w+)/g,'<a class="hashtag" data-hashtag="$1">#$1</a>')
+        .replace(/@(\w+)/g,'<a class="mention" data-mention="$1">@$1</a>');
+    });
+    bodyHtml=processedLines.join('<br>');
+  }
+  let embedHtml='';
+  if(imageUrl){
+    embedHtml=`<div class="post-image-embed"><img src="${esc(imageUrl)}" loading="lazy" alt="Image" onerror="this.parentNode.remove()"></div>`;
+  }
+  return`<div class="post-body">${bodyHtml}</div>${embedHtml}`;
+}
+  
+  function renderPostBody(content, imageUrl){
+    if(!content&&!imageUrl)return'';
+    let bodyHtml='';
+    if(content){
+      const lines=content.split('\n');
+      const processedLines=lines.map(line=>{
+        return esc(line)
+          .replace(/#(\w+)/g,'<a class="hashtag" data-hashtag="$1">#$1</a>')
+          .replace(/@(\w+)/g,'<a class="mention" data-mention="$1">@$1</a>');
+      });
+      bodyHtml=processedLines.join('<br>');
+    }
+    let embedHtml='';
+    if(imageUrl){
+      embedHtml=`<div class="post-image-embed"><img src="${esc(imageUrl)}" loading="lazy" alt="Image" onerror="this.parentNode.remove()"></div>`;
+    }
+    return`<div class="post-body">${bodyHtml}</div>${embedHtml}`;
+  }
 // ============================================================
 // FOLLOW SYSTEM
 // ============================================================
@@ -2087,7 +2121,7 @@ function renderPost(post){
   const flagCount=post.flags?Object.keys(post.flags).length:0;
   const flagBadge=flagCount>0&&(App.isAdmin||App.isMod)?`<span class="flag-badge">⚑ ${flagCount}</span>`:'';
   const pinnedBanner=post.pinned?`<div class="post-pinned-banner">📌 Pinned post</div>`:'';
-  const bodyHtml=renderPostBody(post.content||'');
+  const bodyHtml=renderPostBody(post.content||'',post.imageUrl||null);
   wrap.innerHTML=`
     ${pinnedBanner}
     <div class="post-header">
@@ -2334,12 +2368,12 @@ async function submitPost(){
   const txt=document.getElementById('postText');
   const content=txt.value.trim();
   if(!content&&!pendingImageUrl){toast('Write something first','error');return}
-  const fullContent=pendingImageUrl?`${content}\n${pendingImageUrl}`.trim():content;
+  const fullContent=content;
   if(!isPostAllowed(fullContent)){toast('Post contains blocked content','error');return}
   if(fullContent.length>platformConfig.maxPostLength){toast(`Post too long (max ${platformConfig.maxPostLength} chars)`,'error');return}
   const btn=document.getElementById('postBtn');btn.disabled=true;
   const id=db.id();
-  const postData={id,author:me,content:fullContent,likes:{},loves:{},comments:{},createdAt:new Date().toISOString(),deleted:false,pinned:false};
+  const postData={id,author:me,content:fullContent,imageUrl:pendingImageUrl||null,likes:{},loves:{},comments:{},createdAt:new Date().toISOString(),deleted:false,pinned:false};
   if(App.settings.anonymous)postData.anonymous=true;
   if(quotingPostId){const qp=await db.get(`/posts/${quotingPostId}`);postData.quoteOf=quotingPostId;postData.quoteData={author:qp.author,content:qp.content}}
   // Poll
