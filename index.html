@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Parth.Social</title>
+<title>parth.social</title>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
 <script>(function(){ emailjs.init("gWgHwkPBzHaIeiuRW"); })();</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
@@ -58,7 +58,8 @@ img{max-width:100%;display:block}
 .sidebar-user .user-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:4px}
 .sidebar-user .user-handle{font-size:11px;color:var(--text3)}
 .hamburger{display:none;position:fixed;top:calc(16px + var(--safe-top));left:calc(16px + var(--safe-left));z-index:200;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px;cursor:pointer;color:var(--text);font-size:18px;line-height:1;width:44px;height:44px;align-items:center;justify-content:center}
-.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99;backdrop-filter:blur(2px)}
+.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99;backdrop-filter:blur(2px);pointer-events:none;opacity:0;transition:opacity 0.25s ease}
+.sidebar-overlay.open{display:block;pointer-events:auto;opacity:1}
 
 /* BOTTOM NAV (mobile only) */
 .bottom-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:150;background:var(--bg2);border-top:1px solid var(--border);padding:8px 0 calc(8px + var(--safe-bottom));padding-left:var(--safe-left);padding-right:var(--safe-right)}
@@ -167,6 +168,7 @@ img{max-width:100%;display:block}
 .trusted-badge{color:#f59e0b;font-size:12px;line-height:1;title:"Trusted user"}
 .admin-badge{background:var(--red-dim);color:var(--red);font-size:9px;font-weight:800;padding:1px 5px;border-radius:4px;text-transform:uppercase;letter-spacing:0.5px}
 .mod-badge{background:var(--purple-dim);color:var(--purple);font-size:9px;font-weight:800;padding:1px 5px;border-radius:4px;text-transform:uppercase;letter-spacing:0.5px}
+.bot-badge{background:rgba(59,130,246,0.2);color:var(--blue);font-size:9px;font-weight:800;padding:1px 5px;border-radius:4px;text-transform:uppercase;letter-spacing:0.5px}
 
 /* DROPDOWN */
 .dropdown-menu{position:fixed;background:var(--card2);border:1px solid var(--border2);border-radius:var(--radius);padding:6px;min-width:160px;z-index:9999;box-shadow:var(--shadow-lg);animation:menuIn 0.15s ease both}
@@ -466,7 +468,7 @@ body.compact .content-wrap{padding:16px 16px 60px}
   /* Sidebar hidden on mobile, shown as overlay */
   .sidebar{position:fixed;left:0;top:0;height:100vh;transform:translateX(-100%);box-shadow:var(--shadow-lg);padding-top:calc(24px + var(--safe-top));z-index:150}
   .sidebar.open{transform:translateX(0)}
-  .sidebar-overlay.open{display:block}
+  .sidebar-overlay.open{display:block;pointer-events:auto;opacity:1}
   .hamburger{display:flex}
   
   /* Bottom nav on mobile */
@@ -551,7 +553,7 @@ body.compact .content-wrap{padding:16px 16px 60px}
         <button class="auth-tab" id="signupTabBtn">Create account</button>
       </div>
       <form class="auth-form active" id="loginForm">
-        <input class="input" type="text" id="loginUsername" placeholder="username" autocomplete="username" required>
+<input class="input" type="text" id="loginUsername" placeholder="username" autocomplete="username" required enterkeyhint="next">
         <input class="input" type="password" id="loginPassword" placeholder="password" autocomplete="current-password" required>
         <div class="auth-error" id="loginError"></div>
         <button type="submit" class="btn btn-primary btn-full" id="loginSubmit">Sign in</button>
@@ -591,6 +593,7 @@ body.compact .content-wrap{padding:16px 16px 60px}
         <div id="broadcastBanner"></div>
         <div id="timeoutBanner"></div>
         <div class="compose-box" id="composeBox">
+          <div id="composeAnonIndicator" style="display:none;font-size:12px;color:var(--text3);margin-bottom:6px;">🔒 Posting anonymously</div>
           <textarea id="postText" placeholder="what's on your mind?" maxlength="1000" rows="3"></textarea>
           <div id="quotingPreview" style="display:none"></div>
           <div id="pollBuilder" style="display:none;margin-top:10px;"></div>
@@ -612,6 +615,21 @@ body.compact .content-wrap{padding:16px 16px 60px}
     </main>
   </div>
   <div class="ptr-indicator" id="ptrIndicator"><div class="spinner" style="width:14px;height:14px;"></div> Refreshing…</div>
+</div>
+
+<!-- STACKY FEED (AI bot feed - separate from main) -->
+<div id="page-stacky" class="page">
+  <div class="shell">
+    <div id="sidebar-stacky" class="sidebar"></div>
+    <div class="sidebar-overlay" id="sidebarOverlay-stacky"></div>
+    <main class="main" id="stackyMain">
+      <div class="content-wrap">
+        <div class="page-header">🤖 Stacky</div>
+        <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">Conversations with @stacky, Stacky's posts, and replies. No regular feed posts here.</p>
+        <div id="stackyPosts"></div>
+      </div>
+    </main>
+  </div>
 </div>
 
 <!-- DMs -->
@@ -643,7 +661,7 @@ body.compact .content-wrap{padding:16px 16px 60px}
             <div class="dm-messages" id="dmMessages"></div>
             <div class="dm-input-bar">
               <div class="dm-input-wrap">
-                <input class="input" type="text" id="dmInput" placeholder="Type a message… (@username to start)" maxlength="500" autocomplete="off">
+                <input class="input" type="text" id="dmInput" placeholder="Type a message… (@username to start)" maxlength="500" autocomplete="off" enterkeyhint="send">
                 <div id="dmAutocomplete" class="dm-autocomplete" style="display:none"></div>
               </div>
               <button class="btn btn-ghost btn-sm" id="dmEmojiBtn">😊</button>
@@ -698,7 +716,7 @@ body.compact .content-wrap{padding:16px 16px 60px}
               </div>
             </div>
             <div class="group-input-bar">
-              <input class="input" type="text" id="groupInput" placeholder="Type a message..." maxlength="500" style="flex:1">
+<input class="input" type="text" id="groupInput" placeholder="Type a message..." maxlength="500" style="flex:1" enterkeyhint="send">
               <button class="btn btn-ghost btn-sm" id="groupEmojiBtn">😊</button>
               <button class="btn btn-primary" id="groupSendBtn">Send</button>
             </div>
@@ -781,7 +799,7 @@ body.compact .content-wrap{padding:16px 16px 60px}
         <div class="explore-search">
           <div class="search-wrap">
             <span class="search-icon">🔍</span>
-            <input type="text" id="exploreSearch" placeholder="Search people, posts, or #hashtags...">
+<input type="text" id="exploreSearch" placeholder="Search people, posts, or #hashtags..." enterkeyhint="search">
           </div>
           <div class="explore-filters" id="exploreFilters" style="margin-top:10px;display:none;">
             <input class="input btn-sm explore-filter-input" type="text" id="exploreAuthorFilter" placeholder="Author…">
@@ -866,6 +884,10 @@ body.compact .content-wrap{padding:16px 16px 60px}
             </div>
             <div class="settings-section" id="s-feed">
               <div class="settings-title">Feed</div>
+              <div class="settings-row">
+                <div class="settings-row-info"><h4>Show Stacky feed in sidebar</h4><p>Show the 🤖 Stacky AI feed in the nav</p></div>
+                <div class="toggle on" id="toggleShowStackyFeed"></div>
+              </div>
               <div class="settings-row">
                 <div class="settings-row-info"><h4>Show muted posts</h4><p>Muted posts appear instead of hidden</p></div>
                 <div class="toggle" id="toggleShowMuted"></div>
@@ -1234,11 +1256,13 @@ function confirm2(title,msg){
     document.getElementById('confirmOk').replaceWith(newOk);
     const newCancel=document.getElementById('confirmCancel').cloneNode(true);
     document.getElementById('confirmCancel').replaceWith(newCancel);
-    function finish(result){closeModal('confirmModal');overlay.removeEventListener('click',backdropHandler);res(result)}
+    function finish(result){closeModal('confirmModal');overlay.removeEventListener('click',backdropHandler);document.removeEventListener('keydown',keyHandler);res(result)}
     function backdropHandler(e){if(e.target===overlay)finish(false)}
+    function keyHandler(e){if(e.key==='Escape')finish(false)}
     document.getElementById('confirmOk').addEventListener('click',()=>finish(true),{once:true});
     document.getElementById('confirmCancel').addEventListener('click',()=>finish(false),{once:true});
     overlay.addEventListener('click',backdropHandler);
+    document.addEventListener('keydown',keyHandler);
   });
 }
 document.querySelectorAll('[data-close]').forEach(btn=>{btn.addEventListener('click',()=>closeModal(btn.dataset.close))});
@@ -1323,13 +1347,14 @@ function showEmojiPicker(anchorEl, onSelect) {
 // ============================================================
 // ROUTER
 // ============================================================
-const PAGES=['auth','feed','dm','groups','profile','notifications','explore','settings','admin'];
+const PAGES=['auth','feed','stacky','dm','groups','profile','notifications','explore','settings','admin'];
 let currentPage=null;
 let pageIntervals={};
 let feedInterval=null,dmInterval=null,groupInterval=null;
 
 function navigate(page,params={}){
   if(currentPage&&pageIntervals[currentPage]){clearInterval(pageIntervals[currentPage]);delete pageIntervals[currentPage]}
+  if(currentPage==='admin'&&typeof activeUserInterval!=='undefined'&&activeUserInterval){clearInterval(activeUserInterval);activeUserInterval=null}
   feedInterval=null;dmInterval=null;groupInterval=null;
   PAGES.forEach(p=>{const el=document.getElementById(`page-${p}`);if(el)el.classList.remove('active')});
   const el=document.getElementById(`page-${page}`);
@@ -1344,6 +1369,7 @@ function navigate(page,params={}){
   }
   switch(page){
     case'feed':initFeed();break;
+    case'stacky':initStacky();break;
     case'dm':initDMs(params);break;
     case'groups':initGroups();break;
     case'profile':initProfile(params.user);break;
@@ -1366,15 +1392,19 @@ function updateDocTitle(){
 const BOTTOM_NAV_ITEMS=[
   {id:'feed',icon:'🏠',label:'Feed'},
   {id:'dm',icon:'💬',label:'DMs'},
+  {id:'groups',icon:'👥',label:'Groups'},
   {id:'notifications',icon:'🔔',label:'Alerts'},
   {id:'explore',icon:'🔍',label:'Explore'},
   {id:'profile',icon:'👤',label:'Me'},
+  {id:'settings',icon:'⚙️',label:'Settings'},
+  {id:'admin',icon:'🛡️',label:'Admin',adminOnly:true},
 ];
 
 function renderBottomNav(activePage){
   const inner=document.getElementById('bottomNavInner');if(!inner)return;
   inner.innerHTML='';
-  BOTTOM_NAV_ITEMS.forEach(item=>{
+  const items=BOTTOM_NAV_ITEMS.filter(item=>!(item.adminOnly&&!App.isAdmin&&!App.isMod));
+  items.forEach(item=>{
     const el=document.createElement('div');
     el.className='bottom-nav-item'+(item.id===activePage||
       (item.id==='profile'&&activePage==='profile')?' active':'');
@@ -1396,6 +1426,7 @@ function renderBottomNav(activePage){
 const DEFAULT_NAV=[
   {id:'feed',icon:'🏠',label:'Feed'},
   {id:'dm',icon:'💬',label:'Messages'},
+  {id:'stacky',icon:'🤖',label:'Stacky',stackyOnly:true},
   {id:'groups',icon:'👥',label:'Groups'},
   {id:'notifications',icon:'🔔',label:'Notifications'},
   {id:'explore',icon:'🔍',label:'Explore'},
@@ -1422,7 +1453,8 @@ function renderSidebar(containerId,activePage){
   el.dataset.renderedPage=activePage;
   const me=App.me();
   const order=getNavOrder();
-  const navItems=[...DEFAULT_NAV].sort((a,b)=>order.indexOf(a.id)-order.indexOf(b.id));
+  let navItems=[...DEFAULT_NAV].sort((a,b)=>order.indexOf(a.id)-order.indexOf(b.id));
+  if(App.settings.showStackyFeed===false)navItems=navItems.filter(n=>n.id!=='stacky');
   if(App.isAdmin||App.isMod){navItems.push({id:'admin',icon:'🛡️',label:App.isAdmin?'Admin':'Moderation'});}
   let html=`<div class="sidebar-logo">parth<span>.</span>social</div>`;
   const unreadNotif=App.notifCount||0;
@@ -1482,7 +1514,7 @@ function setupHamburger(page){
 const App={
   _me:null,_token:null,isAdmin:false,isMod:false,displayName:'',
   notifCount:0,unreadDmCount:0,
-  settings:{showMuted:false,relativeTime:true,compact:false,accent:'#f97316',notifLikes:true,notifComments:true,notifFollows:true,notifMentions:true,publicProfile:true,allowDMs:true,anonymous:false,paused:false,mutedKeywords:[],blockedUsers:{}},
+  settings:{showMuted:false,relativeTime:true,compact:false,accent:'#f97316',notifLikes:true,notifComments:true,notifFollows:true,notifMentions:true,publicProfile:true,allowDMs:true,anonymous:false,paused:false,showStackyFeed:true,mutedKeywords:[],blockedUsers:{}},
   mutedUsers:{},
   me(){return this._me||localStorage.getItem('username')},
   token(){return this._token||localStorage.getItem('authToken')},
@@ -1580,7 +1612,7 @@ const App={
     toast(`@${username} unblocked`,'info');
   },
 
-  isBlocked(username){return !!(this.settings.blockedUsers&&this.settings.blockedUsers[username])},
+  isBlocked(username){return !!(this.settings.blockedUsers&&typeof this.settings.blockedUsers==='object'&&this.settings.blockedUsers[username])},
 
   logout(){
     if(this._token)db.del(`/sessions/${this._token}`);
@@ -1632,43 +1664,6 @@ function renderPostBody(content, imageUrl){
   return`<div class="post-body">${bodyHtml}</div>${embedHtml}`;
 }
 
-  function renderPostBody(content, imageUrl){
-  if(!content&&!imageUrl)return'';
-  let bodyHtml='';
-  if(content){
-    const lines=content.split('\n');
-    const processedLines=lines.map(line=>{
-      return esc(line)
-        .replace(/#(\w+)/g,'<a class="hashtag" data-hashtag="$1">#$1</a>')
-        .replace(/@(\w+)/g,'<a class="mention" data-mention="$1">@$1</a>');
-    });
-    bodyHtml=processedLines.join('<br>');
-  }
-  let embedHtml='';
-  if(imageUrl){
-    embedHtml=`<div class="post-image-embed"><img src="${esc(imageUrl)}" loading="lazy" alt="Image" onerror="this.parentNode.remove()"></div>`;
-  }
-  return`<div class="post-body">${bodyHtml}</div>${embedHtml}`;
-}
-  
-  function renderPostBody(content, imageUrl){
-    if(!content&&!imageUrl)return'';
-    let bodyHtml='';
-    if(content){
-      const lines=content.split('\n');
-      const processedLines=lines.map(line=>{
-        return esc(line)
-          .replace(/#(\w+)/g,'<a class="hashtag" data-hashtag="$1">#$1</a>')
-          .replace(/@(\w+)/g,'<a class="mention" data-mention="$1">@$1</a>');
-      });
-      bodyHtml=processedLines.join('<br>');
-    }
-    let embedHtml='';
-    if(imageUrl){
-      embedHtml=`<div class="post-image-embed"><img src="${esc(imageUrl)}" loading="lazy" alt="Image" onerror="this.parentNode.remove()"></div>`;
-    }
-    return`<div class="post-body">${bodyHtml}</div>${embedHtml}`;
-  }
 // ============================================================
 // FOLLOW SYSTEM
 // ============================================================
@@ -1748,15 +1743,15 @@ async function sendVerificationEmail(username,email){
     if(!u||!p){err.textContent='Fill in all fields.';err.classList.add('show');return}
     const btn=document.getElementById('loginSubmit');
     btn.disabled=true;btn.textContent='Signing in…';
+    try{
     const hash=await sha256(p);
     const user=await db.get(`/users/${u}`);
     if(!user||user.passwordHash!==hash){
-      err.textContent='Invalid username or password.';err.classList.add('show');
-      btn.disabled=false;btn.textContent='Sign in';return;
+      err.textContent='Invalid username or password.';err.classList.add('show');return;
     }
     if(user.banned){
       const now=Date.now();
-      if(!user.banExpiry||user.banExpiry>now){btn.disabled=false;btn.textContent='Sign in';showBannedScreen(user.banReason||'Your account has been suspended.');return}
+      if(!user.banExpiry||user.banExpiry>now){showBannedScreen(user.banReason||'Your account has been suspended.');return}
       else await db.patch(`/users/${u}`,{banned:false,banReason:null,banExpiry:null});
     }
     if(user.paused){
@@ -1777,6 +1772,8 @@ async function sendVerificationEmail(username,email){
     await App.refreshNotifCount();await App.refreshDmCount();
     await log('login');
     navigate('feed');
+    } catch(e){console.error(e);err.textContent='Something went wrong. Try again.';err.classList.add('show');}
+    finally{btn.disabled=false;btn.textContent='Sign in';}
   };
 
   signupForm.onsubmit=async e=>{
@@ -1914,6 +1911,7 @@ function isKeywordMuted(text){
 let feedInitialized=false;
 let quotingPostId=null;
 let renderedPostIds=new Set();
+let loadFeedInProgress=false;
 let pollOptions=[];
 let pendingImageUrl='';
 
@@ -1940,12 +1938,54 @@ function initFeed(){
   }
   checkTimeoutBanner();checkComposeBanner();loadBroadcastBanner();
   loadFeed(true);
+  const anonInd=document.getElementById('composeAnonIndicator');if(anonInd)anonInd.style.display=App.settings.anonymous?'block':'none';
   feedInterval=setInterval(async()=>{
     await loadFeed(false);
     await App.refreshDmCount();await App.refreshNotifCount();
     renderSidebar('sidebar','feed');renderBottomNav('feed');
   },10000);
   pageIntervals['feed']=feedInterval;
+}
+
+let stackyRenderedIds=new Set();
+let stackyFeedInterval=null;
+function initStacky(){
+  if(stackyFeedInterval){clearInterval(stackyFeedInterval);stackyFeedInterval=null}
+  loadStackyFeed(true);
+  stackyFeedInterval=setInterval(()=>loadStackyFeed(false),15000);
+  pageIntervals['stacky']=stackyFeedInterval;
+}
+
+async function loadStackyFeed(firstLoad=false){
+  await loadUserCache();
+  const me=App.me();
+  const posts=await db.get('/posts');
+  const container=document.getElementById('stackyPosts');
+  if(!container)return;
+  if(!posts){
+    container.innerHTML='<div class="empty-state"><div class="empty-state-icon">🤖</div><div class="empty-state-text">No Stacky activity yet.</div></div>';
+    stackyRenderedIds.clear();return;
+  }
+  const all=Object.entries(posts).map(([id,p])=>({...p,id})).filter(p=>!p.deleted);
+  const stackyOnly=all.filter(p=>{
+    if(p.author==='stacky')return true;
+    if((p.content||'').toLowerCase().includes('@stacky'))return true;
+    if(p.quoteOf){const q=all.find(x=>x.id===p.quoteOf);if(q&&q.author==='stacky')return true;}
+    return false;
+  }).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  if(firstLoad){container.innerHTML='';stackyRenderedIds.clear();}
+  const newPosts=stackyOnly.filter(p=>!stackyRenderedIds.has(p.id));
+  newPosts.forEach(post=>{
+    const el=renderPost(post);
+    el.style.animation='postIn 0.3s ease both';
+    container.appendChild(el);
+    stackyRenderedIds.add(post.id);
+  });
+  stackyOnly.forEach(p=>updatePostCounts(p));
+  container.querySelectorAll('.post-item[data-postid]').forEach(el=>{
+    if(!stackyOnly.find(p=>p.id===el.dataset.postid)){el.remove();stackyRenderedIds.delete(el.dataset.postid);}
+  });
+  if(firstLoad&&!stackyOnly.length)container.innerHTML='<div class="empty-state"><div class="empty-state-icon">🤖</div><div class="empty-state-text">No Stacky activity yet. Mention @stacky in a post to chat!</div></div>';
 }
 
 function togglePollBuilder(){
@@ -2025,15 +2065,19 @@ async function checkComposeBanner(){
 async function loadBroadcastBanner(){
   const broadcast=await db.get('/broadcast');const bannerEl=document.getElementById('broadcastBanner');if(!bannerEl)return;
   if(broadcast&&broadcast.text&&broadcast.active){
-    const dismissed=sessionStorage.getItem(`bc_dismissed_${broadcast.id}`);
+    const bid=broadcast.id||broadcast.createdAt||'0';
+    const dismissed=sessionStorage.getItem(`bc_dismissed_${bid}`);
     if(!dismissed){
-      bannerEl.innerHTML=`<div class="broadcast-banner"><span class="bc-icon">📢</span><div style="flex:1;font-size:13px;">${esc(broadcast.text)}</div><span class="bc-close" data-bcid="${esc(broadcast.id||'')}">✕</span></div>`;
+      bannerEl.innerHTML=`<div class="broadcast-banner"><span class="bc-icon">📢</span><div style="flex:1;font-size:13px;">${esc(broadcast.text)}</div><span class="bc-close" data-bcid="${esc(bid)}">✕</span></div>`;
       bannerEl.querySelector('.bc-close').onclick=function(){sessionStorage.setItem(`bc_dismissed_${this.dataset.bcid}`,'1');bannerEl.innerHTML=''};
     }
   }
 }
 
 async function loadFeed(firstLoad=false){
+  if(loadFeedInProgress)return;
+  loadFeedInProgress=true;
+  try{
   await loadUserCache();await loadConfig();
   const me=App.me();
   const posts=await db.get('/posts');
@@ -2050,6 +2094,7 @@ async function loadFeed(firstLoad=false){
       const u=usersCache[p.author]||{};
       if(u.globalMuted&&p.author!==me)return false;
       if(App.isBlocked(p.author)&&p.author!==me)return false;
+      if(p.author==='stacky')return false;
       if(App.settings.paused&&p.author!==me)return false; // paused: only see own posts
       if(isKeywordMuted(p.content||'')&&p.author!==me)return false;
       return true;
@@ -2082,6 +2127,7 @@ async function loadFeed(firstLoad=false){
       if(!regular.find(p=>p.id===el.dataset.postid)){el.remove();renderedPostIds.delete(el.dataset.postid)}
     });
   }
+  } finally{loadFeedInProgress=false;}
 }
 
 function renderPost(post){
@@ -2101,12 +2147,12 @@ function renderPost(post){
   const liked=post.likes&&post.likes[me];
   const loved=post.loves&&post.loves[me];
   let quoteHtml='';
-  if(post.quoteOf){const qp=post.quoteData||{};quoteHtml=`<div class="quote-block" data-quoteid="${esc(post.quoteOf)}"><div class="quote-author">↩ @${esc(qp.author||'?')}</div><div class="quote-text">${esc((qp.content||'').slice(0,120))}${(qp.content||'').length>120?'…':''}</div></div>`}
+  if(post.quoteOf){const qp=post.quoteData||{};const qAuthor=qp.anonymous?'Anonymous':(qp.author?'@'+qp.author:'?');quoteHtml=`<div class="quote-block" data-quoteid="${esc(post.quoteOf)}"><div class="quote-author">↩ ${esc(qAuthor)}</div><div class="quote-text">${esc((qp.content||'').slice(0,120))}${(qp.content||'').length>120?'…':''}</div></div>`}
   let pollHtml='';
   if(post.poll&&post.poll.options){
     const totalVotes=Object.values(post.poll.votes||{}).length;
     const myVote=post.poll.votes&&post.poll.votes[me];
-    const voted=!!myVote;
+    const voted=post.poll.votes&&post.poll.votes.hasOwnProperty(me);
     pollHtml=`<div class="poll-container">${post.poll.options.map((opt,idx)=>{
       const count=post.poll.votes?Object.values(post.poll.votes).filter(v=>v===idx).length:0;
       const pct=totalVotes?Math.round(count/totalVotes*100):0;
@@ -2114,10 +2160,12 @@ function renderPost(post){
       return`<div class="poll-option${voted?' voted':''}" data-vote-idx="${idx}" data-postid="${esc(post.id)}"><div class="poll-bar" style="width:${voted?pct:0}%"></div><div class="poll-option-content"><span>${esc(opt)}${isMyVote?' ✓':''}</span>${voted?`<span class="poll-option-pct">${pct}%</span>`:''}</div></div>`;
     }).join('')}<div class="poll-meta">${totalVotes} vote${totalVotes!==1?'s':''}</div></div>`;
   }
-  const authorAvatarHtml=isAnon?'?':avatarEl(post.author,user.avatarUrl||null);
+  const authorAvatarHtml=isAnon||(post.anonymous&&(App.isAdmin||App.isMod))?'?':avatarEl(post.author,user.avatarUrl||null);
+  const showAnonToAdmin=post.anonymous&&(App.isAdmin||App.isMod);
+  const authorDisplay=showAnonToAdmin?'<em>Anonymous</em> <button type="button" class="btn btn-ghost btn-xs" style="margin-left:4px;font-size:11px;" data-reveal-author="'+esc(post.author)+'">👁 View author</button>':(isAnon?'<em>Anonymous</em>':esc(user.displayName||post.author));
   const trustedMark=user.trusted?`<span class="trusted-badge" title="Trusted">★</span>`:'';
   const verifiedMark=!user.trusted&&user.verified?`<span class="verified-badge" title="Verified">✓</span>`:'';
-  const roleMark=user.role==='admin'?`<span class="admin-badge">ADM</span>`:user.role==='moderator'?`<span class="mod-badge">MOD</span>`:'';
+  const roleMark=user.role==='admin'?`<span class="admin-badge">ADM</span>`:user.role==='moderator'?`<span class="mod-badge">MOD</span>`:(post.author==='stacky'||user.bot)?`<span class="bot-badge">BOT</span>`:'';
   const flagCount=post.flags?Object.keys(post.flags).length:0;
   const flagBadge=flagCount>0&&(App.isAdmin||App.isMod)?`<span class="flag-badge">⚑ ${flagCount}</span>`:'';
   const pinnedBanner=post.pinned?`<div class="post-pinned-banner">📌 Pinned post</div>`:'';
@@ -2125,12 +2173,12 @@ function renderPost(post){
   wrap.innerHTML=`
     ${pinnedBanner}
     <div class="post-header">
-      <div class="post-avatar${isAnon?' anon-avatar':''}" data-profile="${isAnon?'':esc(post.author)}">${authorAvatarHtml}</div>
+      <div class="post-avatar${isAnon||showAnonToAdmin?' anon-avatar':''}" data-profile="${isAnon||showAnonToAdmin?'anonymous':esc(post.author)}">${authorAvatarHtml}</div>
       <div class="post-meta">
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-          <span class="post-author" data-profile="${isAnon?'':esc(post.author)}">${isAnon?'<em>Anonymous</em>':esc(user.displayName||post.author)}</span>
-          ${isAnon?'':`${trustedMark}${verifiedMark}${roleMark}${flagBadge}`}
-          ${isAnon?'':`<span class="text-muted text-xs">@${esc(post.author)}</span>`}
+          <span class="post-author" data-profile="${isAnon||showAnonToAdmin?'anonymous':esc(post.author)}">${authorDisplay}</span>
+          ${isAnon||showAnonToAdmin?'':`${trustedMark}${verifiedMark}${roleMark}${flagBadge}`}
+          ${isAnon||showAnonToAdmin?'':`<span class="text-muted text-xs">@${esc(post.author)}</span>`}
         </div>
         <div class="post-time">${fmtTime(post.createdAt)}${post.editedAt?' (edited)':''}</div>
       </div>
@@ -2162,8 +2210,21 @@ function renderPost(post){
 
   wrap.addEventListener('click',e=>{
     if(e.target.closest('.poll-option'))return; // handled above
+    const revealBtn=e.target.closest('[data-reveal-author]');
+    if(revealBtn){toast('Author: @'+revealBtn.dataset.revealAuthor,'info');return}
+    const reactionChip=e.target.closest('.msg-reaction-chip[data-post-reaction-postid]');
+    if(reactionChip){
+      const pid=reactionChip.dataset.postReactionPostid;const emoji=reactionChip.dataset.postReactionEmoji;
+      (async()=>{
+        const current=await db.get(`/posts/${pid}/reactions/${me}`);
+        if(current===emoji)await db.del(`/posts/${pid}/reactions/${me}`);
+        else await db.set(`/posts/${pid}/reactions/${me}`,emoji);
+        if(currentPage==='feed')loadFeed(false);else if(currentPage==='stacky')loadStackyFeed(false);
+      })();
+      return;
+    }
     const profileEl=e.target.closest('[data-profile]');
-    if(profileEl&&profileEl.dataset.profile&&!e.target.closest('[data-action]')&&!e.target.closest('.post-menu-btn')&&!e.target.closest('.hashtag')&&!e.target.closest('.mention')){navigate('profile',{user:profileEl.dataset.profile});return}
+    if(profileEl&&profileEl.dataset.profile&&profileEl.dataset.profile!=='anonymous'&&!e.target.closest('[data-action]')&&!e.target.closest('.post-menu-btn')&&!e.target.closest('.hashtag')&&!e.target.closest('.mention')){navigate('profile',{user:profileEl.dataset.profile});return}
     const hashtagEl=e.target.closest('.hashtag');
     if(hashtagEl){showHashtagModal(hashtagEl.dataset.hashtag);return}
     const mentionEl=e.target.closest('.mention');
@@ -2204,6 +2265,7 @@ async function showHashtagModal(tag){
 function scrollToPost(postId){
   const el=document.querySelector(`.post-item[data-postid="${CSS.escape(postId)}"]`);
   if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.style.transition='background 0.3s ease';el.style.background='var(--accent-dim)';setTimeout(()=>{el.style.background=''},1200)}
+  else toast('Post no longer available','info');
 }
 
 function updatePostCounts(post){
@@ -2375,7 +2437,7 @@ async function submitPost(){
   const id=db.id();
   const postData={id,author:me,content:fullContent,imageUrl:pendingImageUrl||null,likes:{},loves:{},comments:{},createdAt:new Date().toISOString(),deleted:false,pinned:false};
   if(App.settings.anonymous)postData.anonymous=true;
-  if(quotingPostId){const qp=await db.get(`/posts/${quotingPostId}`);postData.quoteOf=quotingPostId;postData.quoteData={author:qp.author,content:qp.content}}
+  if(quotingPostId){const qp=await db.get(`/posts/${quotingPostId}`);postData.quoteOf=quotingPostId;postData.quoteData={author:qp?.author,content:qp?.content,anonymous:!!(qp?.anonymous)}}
   // Poll
   const validOpts=pollOptions.filter(o=>o.trim());
   if(validOpts.length>=2)postData.poll={options:validOpts,votes:{}};
@@ -2400,6 +2462,8 @@ let currentConvo=null,typingTimeout=null,dmInitialized=false,dmMsgCount=0;
 function convoId(a,b){return a<b?`${a}_${b}`:`${b}_${a}`}
 
 function initDMs(params={}){
+  convoFilter='';
+  const searchInp=document.getElementById('dmSearchInput');if(searchInp)searchInp.value='';
   if(dmInterval){clearInterval(dmInterval);dmInterval=null}
   if(!dmInitialized){
     dmInitialized=true;
@@ -2413,7 +2477,7 @@ function initDMs(params={}){
     };
     document.getElementById('dmSendBtn').onclick=sendDm;
     const dmInput=document.getElementById('dmInput');
-    dmInput.addEventListener('keydown',e=>{
+    const keydownHandler=e=>{
       if(e.key==='Enter'){e.preventDefault();
         const ac=document.getElementById('dmAutocomplete');
         if(ac.style.display!=='none'){
@@ -2421,12 +2485,15 @@ function initDMs(params={}){
         }
         sendDm();
       } else if(e.key==='Tab'){
-        // Tab to accept autocomplete
         const ac=document.getElementById('dmAutocomplete');
         if(ac.style.display!=='none'){e.preventDefault();const first=ac.querySelector('.dm-autocomplete-item');if(first)first.click();}
       } else {handleTyping();handleDmAutocomplete(dmInput.value)}
-    });
-    dmInput.addEventListener('input',()=>handleDmAutocomplete(dmInput.value));
+    };
+    const inputHandler=()=>handleDmAutocomplete(dmInput.value);
+    if(dmInput._dmKeydownHandler){dmInput.removeEventListener('keydown',dmInput._dmKeydownHandler);dmInput.removeEventListener('input',dmInput._dmInputHandler);}
+    dmInput._dmKeydownHandler=keydownHandler;dmInput._dmInputHandler=inputHandler;
+    dmInput.addEventListener('keydown',keydownHandler);
+    dmInput.addEventListener('input',inputHandler);
     document.getElementById('dmBackBtn').onclick=()=>showDmList();
     document.getElementById('dmSearchInput').oninput=e=>{filterConvos(e.target.value)};
     document.getElementById('dmEmojiBtn').onclick=function(){showEmojiPicker(this,emoji=>{const inp=document.getElementById('dmInput');inp.value+=emoji;inp.focus()})};
@@ -2524,10 +2591,14 @@ async function loadDmThread(other){
   const msgs=Object.entries(data).map(([k,v])=>({...v,_key:k})).sort((a,b)=>new Date(a.createdAt)-new Date(b.createdAt));
   const cid2=convoId(me,other);
   msgs.forEach(m=>{if(m.sender!==me&&!m.read)db.set(`/dms/${cid2}/messages/${m._key}/read`,true)});
-  if(msgs.length===dmMsgCount)return;
-  dmMsgCount=msgs.length;
   const atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<80;
-  box.innerHTML='';
+  if(msgs.length===dmMsgCount&&box.children.length>0){
+    const sameKeys=Array.from(box.querySelectorAll('[data-msgkey]')).map(el=>el.dataset.msgkey).join(',');
+    const newKeys=msgs.map(m=>m._key).join(',');
+    if(sameKeys===newKeys)return;
+  }
+  dmMsgCount=msgs.length;
+  const fragment=document.createDocumentFragment();
   msgs.forEach((m,idx)=>{
     const isSent=m.sender===me;
     const row=document.createElement('div');
@@ -2548,8 +2619,10 @@ async function loadDmThread(other){
       bubble.addEventListener('touchend',()=>clearTimeout(pressTimer),{passive:true});
       bubble.addEventListener('touchmove',()=>clearTimeout(pressTimer),{passive:true});
     }
-    box.appendChild(row);
+    fragment.appendChild(row);
   });
+  box.innerHTML='';
+  box.appendChild(fragment);
   // Bind dm reaction chips
   box.querySelectorAll('[data-dm-react-key]').forEach(chip=>{
     chip.addEventListener('click',async()=>{
@@ -2657,7 +2730,11 @@ function initGroups(){
     document.getElementById('discoverGroupsBtn').onclick=openDiscoverGroups;
     document.getElementById('createGroupBtn').onclick=createGroup;
     document.getElementById('groupSendBtn').onclick=sendGroupMsg;
-    document.getElementById('groupInput').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();sendGroupMsg()}});
+    const groupInput=document.getElementById('groupInput');
+    const groupKeydownHandler=e=>{if(e.key==='Enter'){e.preventDefault();sendGroupMsg()}};
+    if(groupInput._groupKeydownHandler){groupInput.removeEventListener('keydown',groupInput._groupKeydownHandler);}
+    groupInput._groupKeydownHandler=groupKeydownHandler;
+    groupInput.addEventListener('keydown',groupKeydownHandler);
     document.getElementById('groupInviteBtn').onclick=inviteToGroup;
     document.getElementById('groupLeaveBtn').onclick=leaveGroup;
     document.getElementById('groupBackBtn').onclick=showGroupList;
@@ -2777,10 +2854,15 @@ async function loadGroupMessages(groupId,firstLoad=false){
   await loadUserCache();
   if(!msgs){if(firstLoad)box.innerHTML='<div style="text-align:center;color:var(--text3);font-size:13px;padding:20px;">No messages yet!</div>';groupMsgCount=0;return}
   const arr=Object.entries(msgs).map(([k,m])=>({...m,_key:k})).sort((a,b)=>new Date(a.createdAt)-new Date(b.createdAt));
-  if(!firstLoad&&arr.length===groupMsgCount)return;
+  const atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<80;
+  if(!firstLoad&&arr.length===groupMsgCount&&box.querySelectorAll('[data-msgkey]').length===arr.length){
+    const existingKeys=Array.from(box.querySelectorAll('[data-msgkey]')).map(el=>el.dataset.msgkey).sort().join(',');
+    const newKeys=arr.map(m=>m._key).sort().join(',');
+    if(existingKeys===newKeys)return;
+  }
   groupMsgCount=arr.length;
-  const me=App.me();const atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<80;
-  box.innerHTML=arr.map(m=>{
+  const me=App.me();
+  const html=arr.map(m=>{
     const u=usersCache[m.author]||{};
     const trustedMark=u.trusted?`<span class="trusted-badge" style="font-size:10px;">★</span>`:'';
     const verMark=!u.trusted&&u.verified?`<span class="verified-badge" style="font-size:10px;">✓</span>`:'';
@@ -2795,6 +2877,7 @@ async function loadGroupMessages(groupId,firstLoad=false){
       </div>
     </div>`;
   }).join('');
+  box.innerHTML=html;
   box.querySelectorAll('[data-profile]').forEach(el=>{el.addEventListener('click',()=>navigate('profile',{user:el.dataset.profile}))});
   box.querySelectorAll('[data-pin-group-msg]').forEach(btn=>{
     btn.addEventListener('click',async()=>{
@@ -2953,7 +3036,9 @@ async function loadProfileTab(target,tab){
   if(tab==='posts'){
     const posts=await db.get('/posts');
     if(!posts){el.innerHTML='<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">No posts yet</div></div>';return}
-    const arr=Object.entries(posts).map(([id,p])=>({...p,id})).filter(p=>p.author===target&&!p.deleted).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+    let arr=Object.entries(posts).map(([id,p])=>({...p,id})).filter(p=>p.author===target&&!p.deleted);
+    if(target===App.me())arr=arr.filter(p=>!p.anonymous);
+    arr.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
     if(!arr.length){el.innerHTML='<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">No posts yet</div></div>';return}
     el.innerHTML='';arr.forEach(p=>el.appendChild(renderPost(p)));
   } else {
@@ -3007,6 +3092,10 @@ async function initNotifications(){
   });
   if(!notifs){list.innerHTML='<div class="empty-state"><div class="empty-state-icon">🔔</div><div class="empty-state-text">Nothing yet</div></div>';App.notifCount=0;updateDocTitle();return}
   renderNotifList(notifs);
+  pageIntervals['notifications']=setInterval(async()=>{
+    const fresh=await db.get(`/notifications/${me}`);
+    if(fresh){App.notifCount=Object.values(fresh).filter(n=>!n.read).length;updateDocTitle();renderNotifList(fresh);}
+  },15000);
   document.getElementById('markAllReadBtn').onclick=async()=>{
     const allNotifs=await db.get(`/notifications/${me}`);
     if(allNotifs)for(const id of Object.keys(allNotifs))await db.set(`/notifications/${me}/${id}/read`,true);
@@ -3021,15 +3110,15 @@ function renderNotifList(notifs){
   const me=App.me();
   let arr=Object.entries(notifs).map(([id,n])=>({...n,id})).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
   if(notifFilter!=='all')arr=arr.filter(n=>n.type===notifFilter);
-  // Batch grouping: group same type+postId within 30 min
+  // Batch grouping: group same type+postId within 30 min (use unique key for follow/system so they don't collapse)
   const grouped=[];const seen=new Set();
   arr.forEach(n=>{
-    const key=`${n.type}_${n.postId||''}`;
-    if(!n.postId){grouped.push({...n,batch:[n]});return}
+    const key=n.type==='follow'||n.type==='system'||!n.postId?`${n.type}_${n.id}`:`${n.type}_${n.postId||''}`;
+    if(!n.postId&&n.type!=='follow'&&n.type!=='system'){grouped.push({...n,batch:[n]});return}
     if(seen.has(key))return;
-    const batch=arr.filter(x=>x.type===n.type&&x.postId===n.postId);
+    const batch=n.type==='follow'||n.type==='system'?[n]:arr.filter(x=>x.type===n.type&&x.postId===n.postId);
     seen.add(key);
-    if(batch.length>1)grouped.push({...n,batch,batchCount:batch.length});
+    if(batch.length>1&&n.type!=='follow'&&n.type!=='system')grouped.push({...n,batch,batchCount:batch.length});
     else grouped.push({...n,batch:[n]});
   });
   list.innerHTML='';
@@ -3046,8 +3135,11 @@ function renderNotifList(notifs){
     }
     el.innerHTML=`<div class="notif-icon ${iconCls}">${icon}</div><div style="flex:1"><div class="notif-text">${msgText}</div><div class="notif-time">${fmtTime(n.createdAt)}</div></div>`;
     el.addEventListener('click',async()=>{
-      await db.set(`/notifications/${me}/${n.id}/read`,true);el.classList.remove('unread');
-      App.notifCount=Math.max(0,App.notifCount-1);updateDocTitle();
+      const toMark=n.batch||[n];
+      for(const b of toMark){await db.set(`/notifications/${me}/${b.id}/read`,true)}
+      el.classList.remove('unread');
+      App.notifCount=Math.max(0,App.notifCount-(n.batchCount||1));
+      updateDocTitle();
       if(n.from&&n.type!=='system')navigate('profile',{user:n.from});
     });
     list.appendChild(el);
@@ -3143,7 +3235,7 @@ function renderExploreUsers(users){
 let settingsInitialized=false;
 
 function initSettings(){
-  setToggle('toggleShowMuted',App.settings.showMuted);setToggle('toggleRelativeTime',App.settings.relativeTime);
+  setToggle('toggleShowMuted',App.settings.showMuted);setToggle('toggleShowStackyFeed',App.settings.showStackyFeed!==false);setToggle('toggleRelativeTime',App.settings.relativeTime);
   setToggle('toggleCompact',App.settings.compact);setToggle('togglePublic',App.settings.publicProfile);
   setToggle('toggleDMs',App.settings.allowDMs);setToggle('notifLikes',App.settings.notifLikes);
   setToggle('notifComments',App.settings.notifComments);setToggle('notifFollows',App.settings.notifFollows);
@@ -3182,6 +3274,7 @@ function initSettings(){
     };
   });
   setupToggle('toggleShowMuted',v=>{App.settings.showMuted=v;App.saveSettings()});
+  setupToggle('toggleShowStackyFeed',v=>{App.settings.showStackyFeed=v;App.saveSettings();renderSidebar(document.querySelector('.sidebar')?.id||'sidebar',currentPage);toast(v?'Stacky feed shown in sidebar':'Stacky feed hidden','info')});
   setupToggle('toggleRelativeTime',v=>{App.settings.relativeTime=v;App.saveSettings()});
   setupToggle('toggleCompact',v=>{App.settings.compact=v;document.body.classList.toggle('compact',v);App.saveSettings()});
   setupToggle('togglePublic',v=>{App.settings.publicProfile=v;App.saveSettings()});
@@ -3326,11 +3419,19 @@ async function initAdmin(){
     document.getElementById('adminUserSearch').oninput=loadAdminUsers;
     document.getElementById('adminPostSearch').oninput=loadAdminPosts;
     document.getElementById('broadcastBtn').onclick=()=>openModal('broadcastModal');
+    document.getElementById('freezeFeedBtn').onclick=async()=>{
+      const v=!platformConfig.freezeFeed;
+      await db.patch('/config',{freezeFeed:v});
+      platformConfig.freezeFeed=v;
+      document.getElementById('freezeFeedBtn').textContent=v?'🔥 Unfreeze Feed':'❄️ Freeze Feed';
+      toast(v?'Feed frozen — read-only':'Feed unfrozen','info');
+      await checkComposeBanner();
+    };
     document.getElementById('sendBroadcastBtn').onclick=async()=>{
       const text=document.getElementById('broadcastText').value.trim();if(!text)return;
       const users=await db.get('/users');
       if(users)for(const uid of Object.keys(users)){await db.push(`/notifications/${uid}`,{type:'system',text,read:false,createdAt:new Date().toISOString()})}
-      await db.set('/broadcast',{text,active:true,createdAt:new Date().toISOString(),by:App.me()});
+      await db.set('/broadcast',{id:db.id(),text,active:true,createdAt:new Date().toISOString(),by:App.me()});
       closeModal('broadcastModal');document.getElementById('broadcastText').value='';
       toast('Broadcast sent','success');
     };
