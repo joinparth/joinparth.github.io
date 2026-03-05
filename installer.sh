@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
-# ============================================================
-#  PWA Installer — joinparth.github.io
-#  Creates a .desktop shortcut with the site's favicon as icon
-# ============================================================
-
 set -euo pipefail
 
-APP_NAME="Parth's Portfolio"
-APP_ID="joinparth-portfolio"
+APP_NAME="parth.social"
+APP_ID="joinparth"
 APP_URL="https://joinparth.github.io"
-FAVICON_URL="https://joinparth.github.io/favicon.ico"
 
 ICON_DIR="$HOME/.local/share/icons/hicolor/128x128/apps"
 DESKTOP_DIR="$HOME/.local/share/applications"
@@ -28,7 +22,7 @@ error()   { echo -e "${RED}[✗]${RESET} $*" >&2; exit 1; }
 # ── Banner ────────────────────────────────────────────────────
 echo -e "${BOLD}"
 echo "  ╔═══════════════════════════════════════╗"
-echo "  ║   PWA Installer · joinparth.github.io  ║"
+echo "  ║         Parth Social Installer        ║"
 echo "  ╚═══════════════════════════════════════╝"
 echo -e "${RESET}"
 
@@ -50,11 +44,10 @@ need_cmd() {
   fi
 }
 
-need_cmd curl   curl
-need_cmd wget   wget
-need_cmd convert imagemagick   # ImageMagick for .ico → .png conversion
+need_cmd curl curl
+need_cmd convert imagemagick
 
-# Detect browser — prefer Chromium-based for PWA support
+# ── Ensure Chromium is installed ──────────────────────────────
 detect_browser() {
   for b in chromium chromium-browser google-chrome google-chrome-stable microsoft-edge microsoft-edge-stable brave-browser; do
     if command -v "$b" &>/dev/null; then
@@ -67,17 +60,24 @@ detect_browser() {
 BROWSER=$(detect_browser)
 
 if [[ -z "$BROWSER" ]]; then
-  warn "No Chromium-based browser found."
-  warn "PWAs need Chrome/Chromium/Edge/Brave for full install support."
-  warn "Falling back to a generic browser shortcut (xdg-open)."
-  BROWSER_CMD="xdg-open"
-  EXEC_LINE="xdg-open ${APP_URL}"
-  NODISPLAY=""
+  info "No Chromium-based browser found — installing Chromium…"
+  if command -v apt-get &>/dev/null; then
+    sudo apt-get install -y chromium || sudo apt-get install -y chromium-browser || error "Could not install Chromium."
+  elif command -v dnf &>/dev/null; then
+    sudo dnf install -y chromium || error "Could not install Chromium."
+  elif command -v pacman &>/dev/null; then
+    sudo pacman -S --noconfirm chromium || error "Could not install Chromium."
+  else
+    error "Could not install Chromium — no known package manager found. Please install Chrome/Chromium manually."
+  fi
+  BROWSER=$(detect_browser)
+  [[ -z "$BROWSER" ]] && error "Chromium installation failed. Please install it manually."
+  success "Chromium installed: $BROWSER"
 else
   success "Found browser: $BROWSER"
-  EXEC_LINE="${BROWSER} --app=${APP_URL} --class=${APP_ID}"
-  NODISPLAY=""
 fi
+
+EXEC_LINE="${BROWSER} --app=${APP_URL} --class=${APP_ID}"
 
 # ── Create directories ────────────────────────────────────────
 info "Creating directories…"
@@ -89,7 +89,6 @@ info "Fetching favicon from ${APP_URL}…"
 TMP_ICO=$(mktemp /tmp/${APP_ID}-XXXXXX.ico)
 TMP_PNG=$(mktemp /tmp/${APP_ID}-XXXXXX.png)
 
-# Try multiple favicon locations
 FETCHED=false
 for fav in \
   "https://joinparth.github.io/favicon.ico" \
@@ -107,17 +106,15 @@ done
 
 if [[ "$FETCHED" == "false" ]]; then
   warn "Could not download favicon — generating a placeholder icon."
-  # Create a simple coloured placeholder with ImageMagick
   convert -size 128x128 xc:'#0f172a' \
     -fill '#38bdf8' \
     -font DejaVu-Sans-Bold -pointsize 52 \
     -gravity Center -annotate 0 'P' \
     "$TMP_PNG" 2>/dev/null || {
-      warn "ImageMagick placeholder generation also failed. Using no icon."
+      warn "ImageMagick placeholder also failed. Using default icon."
       TMP_PNG=""
     }
 else
-  # Convert .ico / any format → 128×128 PNG
   info "Converting icon to PNG…"
   if convert "${TMP_ICO}[0]" -resize 128x128 "$TMP_PNG" 2>/dev/null; then
     success "Icon converted successfully."
@@ -139,6 +136,17 @@ fi
 # Cleanup temp files
 rm -f "$TMP_ICO" "$TMP_PNG"
 
+# ── Remove any stray .desktop files created by ImageMagick ───
+info "Cleaning up stray .desktop files…"
+find "$DESKTOP_DIR" -maxdepth 1 -name "display-im*.desktop" -delete 2>/dev/null || true
+for stray in \
+  "$DESKTOP_DIR/display-im6.q16.desktop" \
+  "$DESKTOP_DIR/display-im6.q16hdri.desktop" \
+  "$DESKTOP_DIR/display-im7.desktop"
+do
+  [[ -f "$stray" ]] && rm -f "$stray" && info "Removed stray: $(basename "$stray")"
+done
+
 # ── Write .desktop file ───────────────────────────────────────
 info "Writing .desktop file…"
 
@@ -148,7 +156,7 @@ Version=1.0
 Type=Application
 Name=${APP_NAME}
 Comment=Parth's personal portfolio — installed as a PWA
-${EXEC_LINE:+Exec=${EXEC_LINE}}
+Exec=${EXEC_LINE}
 ${ICON_LINE}
 Terminal=false
 Categories=Network;WebApplication;
@@ -157,31 +165,16 @@ StartupNotify=true
 Keywords=portfolio;parth;developer;
 EOF
 
-# Overwrite Exec cleanly (here-doc variable expansion can be tricky)
-sed -i "s|^Exec=.*|Exec=${EXEC_LINE}|" "$DESKTOP_FILE"
-
 chmod +x "$DESKTOP_FILE"
 success ".desktop file written to $DESKTOP_FILE"
 
 # ── Refresh desktop database ──────────────────────────────────
 if command -v update-desktop-database &>/dev/null; then
-  update-desktop-database "$DESKTOP_DIR" 2>/dev/null && \
-    info "Desktop database refreshed."
+  update-desktop-database "$DESKTOP_DIR" 2>/dev/null && info "Desktop database refreshed."
 fi
 
 if command -v gtk-update-icon-cache &>/dev/null; then
-  gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null && \
-    info "Icon cache updated."
-fi
-
-# ── (Optional) install as PWA via Chrome/Chromium if available ──
-if [[ -n "$BROWSER" ]]; then
-  echo ""
-  echo -e "${BOLD}  ── PWA Installation ──────────────────────────${RESET}"
-  echo -e "  To fully install as a PWA, run:"
-  echo -e "  ${CYAN}${BROWSER} --app=${APP_URL}${RESET}"
-  echo -e "  Then click the ${BOLD}install icon${RESET} (⊕) in the address bar."
-  echo -e "  ${BOLD}──────────────────────────────────────────────${RESET}"
+  gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null && info "Icon cache updated."
 fi
 
 # ── Done ──────────────────────────────────────────────────────
@@ -191,4 +184,3 @@ echo -e "  ${APP_NAME} has been added to your application menu."
 echo -e "  You can also launch it with:"
 echo -e "  ${CYAN}${EXEC_LINE}${RESET}"
 echo ""
-
