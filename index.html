@@ -1277,7 +1277,8 @@ function showEmojiPicker(anchorEl, onSelect) {
   
   // Calculate position
   const rect = anchorEl.getBoundingClientRect();
-  const pw = 280, ph = 280; // Use a safe estimate for picker height
+  const pw = 280; 
+  const ph = 355; // Updated height to match actual CSS content size (categories + grid)
   const margin = 8;
   
   let top = rect.bottom + 4;
@@ -1293,8 +1294,10 @@ function showEmojiPicker(anchorEl, onSelect) {
   }
   
   // 3. Fix Vertical Overflow (Bottom side)
-  // Check if the picker would go below the viewport
-  if (top + ph > window.innerHeight - margin) {
+  // Use visualViewport height if available (accounts for mobile keyboard)
+  const viewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  
+  if (top + ph > viewportHeight - margin) {
     // Flip it: show above the anchor instead of below
     top = rect.top - ph - 4;
   }
