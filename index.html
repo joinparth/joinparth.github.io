@@ -2182,6 +2182,7 @@ async function loadFeed(firstLoad=false){
       if(u.globalMuted&&p.author!==me)return false;
       if(App.isBlocked(p.author)&&p.author!==me)return false;
       if(p.author==='stacky')return false;
+      if((p.content||'').toLowerCase().includes('@stacky'))return false;
       if(App.settings.paused&&p.author!==me)return false; // paused: only see own posts
       if(isKeywordMuted(p.content||'')&&p.author!==me)return false;
       return true;
